@@ -1062,8 +1062,8 @@ class DomainChecker:
                 model_scores['property_manager_medium'] = model_scores.get('property_manager_medium', 0) + 30
                 
             # Reduce software score if property management indicators are found
-            if scores.get('property_manager_small', 0) > 20 or scores.get('property_manager_medium', 0) > 20:
-                scores['software_provider'] = max(0, scores.get('software_provider', 0) - 30)
+            if model_scores.get('property_manager_small', 0) > 20 or model_scores.get('property_manager_medium', 0) > 20:
+                model_scores['software_provider'] = max(0, model_scores.get('software_provider', 0) - 30)
                 
                 # Fix for small property managers being misclassified
             if any(phrase in all_text for phrase in [
@@ -1456,141 +1456,141 @@ class DomainChecker:
         except Exception:
             return False
 
-        def analyze_content(self, response, result):
-            """Analyze webpage content - ENHANCED VERSION"""
+    def analyze_content(self, response, result):
+        """Analyze webpage content - ENHANCED VERSION"""
+        try:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Extract title
+            title_tag = soup.find('title')
+            if title_tag:
+                result['title'] = title_tag.get_text().strip()
+            
+            # Extract description
+            desc_tag = soup.find('meta', attrs={'name': 'description'})
+            if desc_tag:
+                result['description'] = desc_tag.get('content', '').strip()
+            
+            page_text = soup.get_text().lower()
+            
+            # Check if parked
+            result['is_parked'] = self.is_parked_domain(page_text, result.get('title', ''))
+            
+            # Always run classification for working websites
+            if not result['is_parked']:
+                result['is_business'] = self.is_business_website(soup, page_text)
+            else:
+                result['is_business'] = False
+            
+            # Run industry and size classification for all working sites (business or not)
+            # This ensures vacation rental sites get classified even if they don't meet all "business" criteria
             try:
-                soup = BeautifulSoup(response.content, 'html.parser')
-                
-                # Extract title
-                title_tag = soup.find('title')
-                if title_tag:
-                    result['title'] = title_tag.get_text().strip()
-                
-                # Extract description
-                desc_tag = soup.find('meta', attrs={'name': 'description'})
-                if desc_tag:
-                    result['description'] = desc_tag.get('content', '').strip()
-                
-                page_text = soup.get_text().lower()
-                
-                # Check if parked
-                result['is_parked'] = self.is_parked_domain(page_text, result.get('title', ''))
-                
-                # Always run classification for working websites
-                if not result['is_parked']:
-                    result['is_business'] = self.is_business_website(soup, page_text)
-                else:
-                    result['is_business'] = False
-                
-                # Run industry and size classification for all working sites (business or not)
-                # This ensures vacation rental sites get classified even if they don't meet all "business" criteria
+                industry_result = self.classify_industry(page_text, result.get('title', ''), result.get('description', ''))
+                result['industry_type'] = industry_result.get('industry', '')
+                result['industry_confidence'] = industry_result.get('confidence', 0)
+                logger.info(f"Industry classification for {result['domain']}: {result['industry_type']} (confidence: {result['industry_confidence']})")
+            except Exception as e:
+                logger.error(f"Error in industry classification for {result['domain']}: {e}")
+                result['industry_type'] = ''
+                result['industry_confidence'] = 0
+            
+            # Only classify company size for business websites
+            if result['is_business']:
                 try:
-                    industry_result = self.classify_industry(page_text, result.get('title', ''), result.get('description', ''))
-                    result['industry_type'] = industry_result.get('industry', '')
-                    result['industry_confidence'] = industry_result.get('confidence', 0)
-                    logger.info(f"Industry classification for {result['domain']}: {result['industry_type']} (confidence: {result['industry_confidence']})")
+                    size_result = self.classify_company_size(soup, page_text, result.get('title', ''), result.get('description', ''))
+                    result['company_size'] = size_result.get('size', '')
+                    result['size_confidence'] = size_result.get('confidence', 0)
+                    result['size_details'] = size_result.get('details', {})
+                    logger.info(f"Company size for {result['domain']}: {result['company_size']} (confidence: {result['size_confidence']})")
                 except Exception as e:
-                    logger.error(f"Error in industry classification for {result['domain']}: {e}")
-                    result['industry_type'] = ''
-                    result['industry_confidence'] = 0
-                
-                # Only classify company size for business websites
-                if result['is_business']:
-                    try:
-                        size_result = self.classify_company_size(soup, page_text, result.get('title', ''), result.get('description', ''))
-                        result['company_size'] = size_result.get('size', '')
-                        result['size_confidence'] = size_result.get('confidence', 0)
-                        result['size_details'] = size_result.get('details', {})
-                        logger.info(f"Company size for {result['domain']}: {result['company_size']} (confidence: {result['size_confidence']})")
-                    except Exception as e:
-                        logger.error(f"Error in company size classification for {result['domain']}: {e}")
-                        result['company_size'] = ''
-                        result['size_confidence'] = 0
-                        result['size_details'] = {}
-                    
-                    # Extract business info for business websites
-                    try:
-                        result['business_info'] = self.extract_business_info(soup)
-                    except Exception as e:
-                        logger.error(f"Error extracting business info for {result['domain']}: {e}")
-                        result['business_info'] = {}
-                else:
+                    logger.error(f"Error in company size classification for {result['domain']}: {e}")
                     result['company_size'] = ''
                     result['size_confidence'] = 0
                     result['size_details'] = {}
+                
+                # Extract business info for business websites
+                try:
+                    result['business_info'] = self.extract_business_info(soup)
+                except Exception as e:
+                    logger.error(f"Error extracting business info for {result['domain']}: {e}")
                     result['business_info'] = {}
-                
-                # ENHANCED: For vacation rental industry, use new classification
-                if result['industry_type'] == 'vacation_rental':
+            else:
+                result['company_size'] = ''
+                result['size_confidence'] = 0
+                result['size_details'] = {}
+                result['business_info'] = {}
+            
+            # ENHANCED: For vacation rental industry, use new classification
+            if result['industry_type'] == 'vacation_rental':
+                try:
+                    vr_classification = self.enhanced_classify_vacation_rental_business(
+                        soup, page_text, result.get('title', ''), 
+                        result.get('description', ''), result.get('final_url', ''),
+                        result.get('business_info', {})
+                    )
+                    
+                    # Update result with enhanced classification
+                    result['vr_business_model'] = vr_classification['business_model']
+                    result['is_target_customer'] = vr_classification['is_target_customer']
+                    result['vr_priority'] = vr_classification['priority']
+                    result['vr_target_score'] = vr_classification['target_score']
+                    result['vr_target_factors'] = vr_classification['target_factors']
+                    result['vr_model_confidence'] = vr_classification['model_confidence']
+                    result['vr_property_count'] = vr_classification['property_count']
+                    result['vr_property_count_confidence'] = vr_classification['property_count_confidence']
+                    result['vr_decision_maker_accessible'] = vr_classification['decision_maker_accessible']
+                    result['vr_decision_maker_score'] = vr_classification['decision_maker_score']
+                    result['vr_needs_website_upgrade'] = vr_classification['needs_website_upgrade']
+                    result['vr_upgrade_indicators'] = vr_classification['upgrade_indicators']
+                    result['vr_property_type'] = vr_classification['property_type']
+                    result['vr_geographic_scope'] = vr_classification['geographic_scope']
+                    result['vr_exclusion_reason'] = vr_classification['exclusion_reason']
+                    
+                    # Log high-priority targets
+                    if vr_classification['priority'] == 'high':
+                        logger.info(f"🎯 HIGH PRIORITY TARGET: {result['domain']}")
+                        logger.info(f"   Model: {vr_classification['business_model']}")
+                        logger.info(f"   Properties: {vr_classification['property_count']}")
+                        logger.info(f"   Decision Maker: {vr_classification['decision_maker_accessible']}")
+                        logger.info(f"   Needs Upgrade: {vr_classification['needs_website_upgrade']}")
+                        
+                except Exception as e:
+                    logger.error(f"Error in enhanced VR classification for {result['domain']}: {e}")
+                    # Fallback to original classification
                     try:
-                        vr_classification = self.enhanced_classify_vacation_rental_business(
-                            soup, page_text, result.get('title', ''), 
-                            result.get('description', ''), result.get('final_url', ''),
-                            result.get('business_info', {})
+                        business_model_result = self.classify_vacation_rental_business_model(
+                            soup, page_text, result.get('title', ''), result.get('description', ''), result.get('final_url', '')
                         )
-                        
-                        # Update result with enhanced classification
-                        result['vr_business_model'] = vr_classification['business_model']
-                        result['is_target_customer'] = vr_classification['is_target_customer']
-                        result['vr_priority'] = vr_classification['priority']
-                        result['vr_target_score'] = vr_classification['target_score']
-                        result['vr_target_factors'] = vr_classification['target_factors']
-                        result['vr_model_confidence'] = vr_classification['model_confidence']
-                        result['vr_property_count'] = vr_classification['property_count']
-                        result['vr_property_count_confidence'] = vr_classification['property_count_confidence']
-                        result['vr_decision_maker_accessible'] = vr_classification['decision_maker_accessible']
-                        result['vr_decision_maker_score'] = vr_classification['decision_maker_score']
-                        result['vr_needs_website_upgrade'] = vr_classification['needs_website_upgrade']
-                        result['vr_upgrade_indicators'] = vr_classification['upgrade_indicators']
-                        result['vr_property_type'] = vr_classification['property_type']
-                        result['vr_geographic_scope'] = vr_classification['geographic_scope']
-                        result['vr_exclusion_reason'] = vr_classification['exclusion_reason']
-                        
-                        # Log high-priority targets
-                        if vr_classification['priority'] == 'high':
-                            logger.info(f"🎯 HIGH PRIORITY TARGET: {result['domain']}")
-                            logger.info(f"   Model: {vr_classification['business_model']}")
-                            logger.info(f"   Properties: {vr_classification['property_count']}")
-                            logger.info(f"   Decision Maker: {vr_classification['decision_maker_accessible']}")
-                            logger.info(f"   Needs Upgrade: {vr_classification['needs_website_upgrade']}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error in enhanced VR classification for {result['domain']}: {e}")
-                        # Fallback to original classification
-                        try:
-                            business_model_result = self.classify_vacation_rental_business_model(
-                                soup, page_text, result.get('title', ''), result.get('description', ''), result.get('final_url', '')
-                            )
-                            result['vr_business_model'] = business_model_result.get('business_model', '')
-                            result['vr_exclusion_reason'] = business_model_result.get('exclusion_reason', '') or ''
-                            result['is_target_customer'] = business_model_result.get('is_target_customer', '')
-                            result['vr_model_confidence'] = business_model_result.get('confidence', 0)
-                        except:
-                            result['vr_business_model'] = ''
-                            result['vr_exclusion_reason'] = ''
-                            result['is_target_customer'] = ''
-                            result['vr_model_confidence'] = 0
-                else:
-                    # For non-vacation rental industries, set default values
-                    result['vr_business_model'] = ''
-                    result['vr_exclusion_reason'] = ''
-                    result['is_target_customer'] = ''
-                    result['vr_model_confidence'] = 0
-                    # Set new fields to empty
-                    result['vr_priority'] = ''
-                    result['vr_target_score'] = 0
-                    result['vr_target_factors'] = []
-                    result['vr_property_count'] = ''
-                    result['vr_property_count_confidence'] = 0
-                    result['vr_decision_maker_accessible'] = ''
-                    result['vr_decision_maker_score'] = 0
-                    result['vr_needs_website_upgrade'] = False
-                    result['vr_upgrade_indicators'] = []
-                    result['vr_property_type'] = ''
-                    result['vr_geographic_scope'] = ''
-                
-            except Exception as e:
-                logger.error(f"Error analyzing content: {e}")
+                        result['vr_business_model'] = business_model_result.get('business_model', '')
+                        result['vr_exclusion_reason'] = business_model_result.get('exclusion_reason', '') or ''
+                        result['is_target_customer'] = business_model_result.get('is_target_customer', '')
+                        result['vr_model_confidence'] = business_model_result.get('confidence', 0)
+                    except:
+                        result['vr_business_model'] = ''
+                        result['vr_exclusion_reason'] = ''
+                        result['is_target_customer'] = ''
+                        result['vr_model_confidence'] = 0
+            else:
+                # For non-vacation rental industries, set default values
+                result['vr_business_model'] = ''
+                result['vr_exclusion_reason'] = ''
+                result['is_target_customer'] = ''
+                result['vr_model_confidence'] = 0
+                # Set new fields to empty
+                result['vr_priority'] = ''
+                result['vr_target_score'] = 0
+                result['vr_target_factors'] = []
+                result['vr_property_count'] = ''
+                result['vr_property_count_confidence'] = 0
+                result['vr_decision_maker_accessible'] = ''
+                result['vr_decision_maker_score'] = 0
+                result['vr_needs_website_upgrade'] = False
+                result['vr_upgrade_indicators'] = []
+                result['vr_property_type'] = ''
+                result['vr_geographic_scope'] = ''
+            
+        except Exception as e:
+            logger.error(f"Error analyzing content: {e}")
 
     def is_parked_domain(self, page_text, title):
         """Check if domain is parked"""
@@ -1626,1308 +1626,1308 @@ class DomainChecker:
         
         return False
 
-        def detect_third_party_listing(self, soup, page_text, title, description, final_url):
-            """Detect if this is a third-party listing page rather than a direct property owner website"""
-            try:
-                all_text = (page_text + ' ' + (title or '') + ' ' + (description or '') + ' ' + (final_url or '')).lower()
-                
-                detection_scores = {
-                    'url_patterns': 0,
-                    'content_indicators': 0,
-                    'template_indicators': 0,
-                    'navigation_indicators': 0,
-                    'generic_contact': 0,
-                    'marketplace_features': 0
-                }
-                
-                listing_data = self.vacation_rental_business_models['third_party_listings']
-                
-                # 1. URL Pattern Analysis (High Weight)
-                url_to_check = final_url or ''
-                for pattern in listing_data['url_patterns']:
-                    if re.search(pattern, url_to_check, re.IGNORECASE):
-                        detection_scores['url_patterns'] += 15  # High score for URL patterns
-                
-                # 2. Content Indicators Analysis
-                for indicator in listing_data['content_indicators']:
-                    count = all_text.count(indicator)
-                    if count > 0:
-                        detection_scores['content_indicators'] += count * 3
-                
-                # 3. Template Structure Indicators
-                for indicator in listing_data['template_indicators']:
-                    if indicator in all_text:
-                        detection_scores['template_indicators'] += 4
-                
-                # 4. Navigation/Browse Features
-                for indicator in listing_data['navigation_indicators']:
-                    if indicator in all_text:
-                        detection_scores['navigation_indicators'] += 5
-                
-                # 5. Generic Contact Information
-                for indicator in listing_data['generic_contact_indicators']:
-                    if indicator in all_text:
-                        detection_scores['generic_contact'] += 6
-                
-                # 6. Advanced Detection: Page Structure Analysis
-                marketplace_structure_score = self.analyze_marketplace_structure(soup, all_text)
-                detection_scores['marketplace_features'] = marketplace_structure_score
-                
-                # 7. Cross-reference with known platforms
-                platform_score = self.check_known_listing_platforms(final_url, all_text)
-                detection_scores['marketplace_features'] += platform_score
-                
-                # Calculate total score and confidence
-                total_score = sum(detection_scores.values())
-                
-                # Weighted scoring - URL patterns are most important
-                weighted_score = (
-                    detection_scores['url_patterns'] * 2.0 +  # URL patterns are strongest indicator
-                    detection_scores['content_indicators'] * 1.5 +
-                    detection_scores['template_indicators'] * 1.2 +
-                    detection_scores['navigation_indicators'] * 1.3 +
-                    detection_scores['generic_contact'] * 1.4 +
-                    detection_scores['marketplace_features'] * 1.6
-                )
-                
-                # Determine if it's a third-party listing
-                is_listing = False
-                confidence = 0
-                
-                if weighted_score >= 25:  # High threshold for confidence
-                    is_listing = True
-                    confidence = min(95, weighted_score * 2)
-                elif weighted_score >= 15:  # Medium threshold
-                    is_listing = True
-                    confidence = min(85, weighted_score * 2.5)
-                elif detection_scores['url_patterns'] >= 15:  # URL pattern alone is strong indicator
-                    is_listing = True
-                    confidence = 90
-                
+    def detect_third_party_listing(self, soup, page_text, title, description, final_url):
+        """Detect if this is a third-party listing page rather than a direct property owner website"""
+        try:
+            all_text = (page_text + ' ' + (title or '') + ' ' + (description or '') + ' ' + (final_url or '')).lower()
+            
+            detection_scores = {
+                'url_patterns': 0,
+                'content_indicators': 0,
+                'template_indicators': 0,
+                'navigation_indicators': 0,
+                'generic_contact': 0,
+                'marketplace_features': 0
+            }
+            
+            listing_data = self.vacation_rental_business_models['third_party_listings']
+            
+            # 1. URL Pattern Analysis (High Weight)
+            url_to_check = final_url or ''
+            for pattern in listing_data['url_patterns']:
+                if re.search(pattern, url_to_check, re.IGNORECASE):
+                    detection_scores['url_patterns'] += 15  # High score for URL patterns
+            
+            # 2. Content Indicators Analysis
+            for indicator in listing_data['content_indicators']:
+                count = all_text.count(indicator)
+                if count > 0:
+                    detection_scores['content_indicators'] += count * 3
+            
+            # 3. Template Structure Indicators
+            for indicator in listing_data['template_indicators']:
+                if indicator in all_text:
+                    detection_scores['template_indicators'] += 4
+            
+            # 4. Navigation/Browse Features
+            for indicator in listing_data['navigation_indicators']:
+                if indicator in all_text:
+                    detection_scores['navigation_indicators'] += 5
+            
+            # 5. Generic Contact Information
+            for indicator in listing_data['generic_contact_indicators']:
+                if indicator in all_text:
+                    detection_scores['generic_contact'] += 6
+            
+            # 6. Advanced Detection: Page Structure Analysis
+            marketplace_structure_score = self.analyze_marketplace_structure(soup, all_text)
+            detection_scores['marketplace_features'] = marketplace_structure_score
+            
+            # 7. Cross-reference with known platforms
+            platform_score = self.check_known_listing_platforms(final_url, all_text)
+            detection_scores['marketplace_features'] += platform_score
+            
+            # Calculate total score and confidence
+            total_score = sum(detection_scores.values())
+            
+            # Weighted scoring - URL patterns are most important
+            weighted_score = (
+                detection_scores['url_patterns'] * 2.0 +  # URL patterns are strongest indicator
+                detection_scores['content_indicators'] * 1.5 +
+                detection_scores['template_indicators'] * 1.2 +
+                detection_scores['navigation_indicators'] * 1.3 +
+                detection_scores['generic_contact'] * 1.4 +
+                detection_scores['marketplace_features'] * 1.6
+            )
+            
+            # Determine if it's a third-party listing
+            is_listing = False
+            confidence = 0
+            
+            if weighted_score >= 25:  # High threshold for confidence
+                is_listing = True
+                confidence = min(95, weighted_score * 2)
+            elif weighted_score >= 15:  # Medium threshold
+                is_listing = True
+                confidence = min(85, weighted_score * 2.5)
+            elif detection_scores['url_patterns'] >= 15:  # URL pattern alone is strong indicator
+                is_listing = True
+                confidence = 90
+            
+            return {
+                'is_third_party_listing': is_listing,
+                'confidence': round(confidence),
+                'detection_scores': detection_scores,
+                'total_score': total_score,
+                'weighted_score': round(weighted_score, 1),
+                'evidence_found': [k for k, v in detection_scores.items() if v > 0]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error detecting third-party listing: {e}")
+            return {
+                'is_third_party_listing': False,
+                'confidence': 0,
+                'detection_scores': {},
+                'total_score': 0,
+                'weighted_score': 0,
+                'evidence_found': []
+            }
+
+    def analyze_marketplace_structure(self, soup, page_text):
+        """Analyze page structure for marketplace indicators"""
+        score = 0
+        
+        try:
+            # Check for booking widgets/forms
+            booking_forms = soup.find_all(['form'], class_=re.compile(r'book|reserv|avail', re.I))
+            if len(booking_forms) > 0:
+                score += 8
+            
+            # Look for calendar widgets
+            calendar_elements = soup.find_all(attrs={'class': re.compile(r'calendar|datepicker|availability', re.I)})
+            if len(calendar_elements) > 0:
+                score += 6
+            
+            # Check for review sections
+            review_elements = soup.find_all(attrs={'class': re.compile(r'review|rating|feedback', re.I)})
+            if len(review_elements) > 2:
+                score += 5
+            
+            # Look for property gallery/slideshow
+            gallery_elements = soup.find_all(attrs={'class': re.compile(r'gallery|slideshow|carousel|photo', re.I)})
+            if len(gallery_elements) > 0:
+                score += 4
+            
+            # Check for amenities lists
+            amenity_elements = soup.find_all(attrs={'class': re.compile(r'amenity|amenities|feature', re.I)})
+            if len(amenity_elements) > 3:
+                score += 3
+            
+            # Look for property specifications (beds, baths, etc.)
+            spec_patterns = ['bed', 'bath', 'sleep', 'guest', 'sqft', 'sq ft']
+            spec_count = sum(1 for pattern in spec_patterns if pattern in page_text)
+            if spec_count >= 4:
+                score += 5
+            
+            # Check for pricing display
+            price_elements = soup.find_all(attrs={'class': re.compile(r'price|rate|cost|fee', re.I)})
+            if len(price_elements) > 2:
+                score += 4
+            
+            # Look for host/owner profile sections
+            host_elements = soup.find_all(attrs={'class': re.compile(r'host|owner|manager', re.I)})
+            if len(host_elements) > 1:
+                score += 6
+            
+            # Check for similar properties section
+            similar_elements = soup.find_all(attrs={'class': re.compile(r'similar|related|recommend', re.I)})
+            if len(similar_elements) > 0:
+                score += 7
+            
+            # Look for map integration
+            map_elements = soup.find_all(['iframe', 'div'], attrs={'class': re.compile(r'map|location', re.I)})
+            if len(map_elements) > 0:
+                score += 3
+            
+        except Exception as e:
+            logger.debug(f"Error analyzing marketplace structure: {e}")
+        
+        return score
+
+    def check_known_listing_platforms(self, url, page_text):
+        """Check against known listing platforms and patterns"""
+        score = 0
+        
+        # Known listing platform domains
+        listing_platforms = [
+            'airbnb', 'vrbo', 'booking', 'expedia', 'tripadvisor', 'homeaway',
+            'vacasa', 'turnkey', 'awaze', 'novasol', 'rentals.com', 'flipkey',
+            'redawning', 'vacationrenter', 'hometogo', 'rentbyowner',
+            'holidaylettings', 'homelidays', 'wimdu', 'citybase', 'uktvillas',
+            'villasofthepworld', 'luxuryretreats', 'onefinestay', 'sonder',
+            'vacationhomerentals', 'beachhouse', 'mountaincabingetaway'
+        ]
+        
+        url_lower = (url or '').lower()
+        for platform in listing_platforms:
+            if platform in url_lower:
+                score += 20  # High score for known platforms
+                break
+        
+        # Check for listing platform branding in content
+        platform_indicators = [
+            'powered by airbnb', 'vrbo listing', 'booking.com property',
+            'tripadvisor rental', 'homeaway property', 'vacasa managed',
+            'listed on', 'featured on', 'available on', 'book through',
+            'reserve on', 'property management by', 'managed by'
+        ]
+        
+        for indicator in platform_indicators:
+            if indicator in page_text:
+                score += 8
+        
+        return score
+
+    def classify_vacation_rental_business_model(self, soup, page_text, title, description, final_url):
+        """Classify vacation rental business model to identify actual rental operators vs service providers vs listings"""
+        try:
+            all_text = (page_text + ' ' + (title or '') + ' ' + (description or '') + ' ' + (final_url or '')).lower()
+            
+            # FIRST: Check if this is a third-party listing (HIGHEST PRIORITY)
+            listing_detection = self.detect_third_party_listing(soup, page_text, title, description, final_url)
+            
+            if listing_detection['is_third_party_listing'] and listing_detection['confidence'] > 70:
                 return {
-                    'is_third_party_listing': is_listing,
-                    'confidence': round(confidence),
-                    'detection_scores': detection_scores,
-                    'total_score': total_score,
-                    'weighted_score': round(weighted_score, 1),
-                    'evidence_found': [k for k, v in detection_scores.items() if v > 0]
+                    'business_model': 'third_party_listing',
+                    'exclusion_reason': 'third_party_listing',
+                    'confidence': listing_detection['confidence'],
+                    'is_target_customer': False,
+                    'listing_detection': listing_detection,
+                    'evidence': listing_detection['evidence_found']
                 }
-                
-            except Exception as e:
-                logger.error(f"Error detecting third-party listing: {e}")
-                return {
-                    'is_third_party_listing': False,
-                    'confidence': 0,
-                    'detection_scores': {},
-                    'total_score': 0,
-                    'weighted_score': 0,
-                    'evidence_found': []
-                }
-
-        def analyze_marketplace_structure(self, soup, page_text):
-            """Analyze page structure for marketplace indicators"""
-            score = 0
             
-            try:
-                # Check for booking widgets/forms
-                booking_forms = soup.find_all(['form'], class_=re.compile(r'book|reserv|avail', re.I))
-                if len(booking_forms) > 0:
-                    score += 8
-                
-                # Look for calendar widgets
-                calendar_elements = soup.find_all(attrs={'class': re.compile(r'calendar|datepicker|availability', re.I)})
-                if len(calendar_elements) > 0:
-                    score += 6
-                
-                # Check for review sections
-                review_elements = soup.find_all(attrs={'class': re.compile(r'review|rating|feedback', re.I)})
-                if len(review_elements) > 2:
-                    score += 5
-                
-                # Look for property gallery/slideshow
-                gallery_elements = soup.find_all(attrs={'class': re.compile(r'gallery|slideshow|carousel|photo', re.I)})
-                if len(gallery_elements) > 0:
-                    score += 4
-                
-                # Check for amenities lists
-                amenity_elements = soup.find_all(attrs={'class': re.compile(r'amenity|amenities|feature', re.I)})
-                if len(amenity_elements) > 3:
-                    score += 3
-                
-                # Look for property specifications (beds, baths, etc.)
-                spec_patterns = ['bed', 'bath', 'sleep', 'guest', 'sqft', 'sq ft']
-                spec_count = sum(1 for pattern in spec_patterns if pattern in page_text)
-                if spec_count >= 4:
-                    score += 5
-                
-                # Check for pricing display
-                price_elements = soup.find_all(attrs={'class': re.compile(r'price|rate|cost|fee', re.I)})
-                if len(price_elements) > 2:
-                    score += 4
-                
-                # Look for host/owner profile sections
-                host_elements = soup.find_all(attrs={'class': re.compile(r'host|owner|manager', re.I)})
-                if len(host_elements) > 1:
-                    score += 6
-                
-                # Check for similar properties section
-                similar_elements = soup.find_all(attrs={'class': re.compile(r'similar|related|recommend', re.I)})
-                if len(similar_elements) > 0:
-                    score += 7
-                
-                # Look for map integration
-                map_elements = soup.find_all(['iframe', 'div'], attrs={'class': re.compile(r'map|location', re.I)})
-                if len(map_elements) > 0:
-                    score += 3
-                
-            except Exception as e:
-                logger.debug(f"Error analyzing marketplace structure: {e}")
-            
-            return score
-
-        def check_known_listing_platforms(self, url, page_text):
-            """Check against known listing platforms and patterns"""
-            score = 0
-            
-            # Known listing platform domains
-            listing_platforms = [
-                'airbnb', 'vrbo', 'booking', 'expedia', 'tripadvisor', 'homeaway',
-                'vacasa', 'turnkey', 'awaze', 'novasol', 'rentals.com', 'flipkey',
-                'redawning', 'vacationrenter', 'hometogo', 'rentbyowner',
-                'holidaylettings', 'homelidays', 'wimdu', 'citybase', 'uktvillas',
-                'villasofthepworld', 'luxuryretreats', 'onefinestay', 'sonder',
-                'vacationhomerentals', 'beachhouse', 'mountaincabingetaway'
-            ]
-            
-            url_lower = (url or '').lower()
-            for platform in listing_platforms:
-                if platform in url_lower:
-                    score += 20  # High score for known platforms
-                    break
-            
-            # Check for listing platform branding in content
-            platform_indicators = [
-                'powered by airbnb', 'vrbo listing', 'booking.com property',
-                'tripadvisor rental', 'homeaway property', 'vacasa managed',
-                'listed on', 'featured on', 'available on', 'book through',
-                'reserve on', 'property management by', 'managed by'
-            ]
-            
-            for indicator in platform_indicators:
-                if indicator in page_text:
-                    score += 8
-            
-            return score
-
-        def classify_vacation_rental_business_model(self, soup, page_text, title, description, final_url):
-            """Classify vacation rental business model to identify actual rental operators vs service providers vs listings"""
-            try:
-                all_text = (page_text + ' ' + (title or '') + ' ' + (description or '') + ' ' + (final_url or '')).lower()
-                
-                # FIRST: Check if this is a third-party listing (HIGHEST PRIORITY)
-                listing_detection = self.detect_third_party_listing(soup, page_text, title, description, final_url)
-                
-                if listing_detection['is_third_party_listing'] and listing_detection['confidence'] > 70:
+            # Check URL for major platforms first
+            for platform_url in self.vacation_rental_business_models['marketplace_platforms']['url_indicators']:
+                if platform_url in (final_url or '').lower():
                     return {
-                        'business_model': 'third_party_listing',
-                        'exclusion_reason': 'third_party_listing',
-                        'confidence': listing_detection['confidence'],
+                        'business_model': 'marketplace_platform',
+                        'exclusion_reason': 'marketplace_platform',
+                        'confidence': 95,
                         'is_target_customer': False,
-                        'listing_detection': listing_detection,
-                        'evidence': listing_detection['evidence_found']
+                        'platform_detected': platform_url
                     }
-                
-                # Check URL for major platforms first
-                for platform_url in self.vacation_rental_business_models['marketplace_platforms']['url_indicators']:
-                    if platform_url in (final_url or '').lower():
-                        return {
-                            'business_model': 'marketplace_platform',
-                            'exclusion_reason': 'marketplace_platform',
-                            'confidence': 95,
-                            'is_target_customer': False,
-                            'platform_detected': platform_url
-                        }
-                
-                # Score different business models
-                scores = {
-                    'marketplace_platform': 0,
-                    'b2b_service_provider': 0,
-                    'marketing_service': 0,
-                    'aggregator_site': 0,
-                    'direct_rental_operator': 0,
-                    'third_party_listing': listing_detection['weighted_score'] if listing_detection['is_third_party_listing'] else 0
-                }
-                
-                # Check marketplace platform indicators
-                for keyword in self.vacation_rental_business_models['marketplace_platforms']['keywords']:
-                    count = all_text.count(keyword)
-                    if count > 0:
-                        if keyword in ['airbnb', 'vrbo', 'booking.com', 'expedia']:
-                            scores['marketplace_platform'] += count * 10  # Strong indicators
-                        else:
-                            scores['marketplace_platform'] += count * 3
-                
-                # Check B2B service provider indicators
-                for keyword in self.vacation_rental_business_models['b2b_service_providers']['keywords']:
-                    count = all_text.count(keyword)
-                    if count > 0:
-                        if keyword in ['property management software', 'vacation rental software', 'pms']:
-                            scores['b2b_service_provider'] += count * 8
-                        elif keyword in ['tools', 'software', 'platform', 'solution']:
-                            scores['b2b_service_provider'] += count * 4
-                        else:
-                            scores['b2b_service_provider'] += count * 2
-                
-                # Check marketing/lead gen indicators
-                for keyword in self.vacation_rental_business_models['marketing_lead_gen']['keywords']:
-                    count = all_text.count(keyword)
-                    if count > 0:
-                        scores['marketing_service'] += count * 3
-                
-                # Check aggregator indicators
-                for keyword in self.vacation_rental_business_models['aggregator_listing_sites']['keywords']:
-                    count = all_text.count(keyword)
-                    if count > 0:
-                        scores['aggregator_site'] += count * 3
-                
-                # Check for actual rental operator indicators
-                for keyword in self.vacation_rental_business_models['actual_rental_operators']['positive_indicators']:
-                    count = all_text.count(keyword)
-                    if count > 0:
-                        if keyword in ['our properties', 'our rentals', 'our vacation homes', 'direct owner', 'property owner']:
-                            scores['direct_rental_operator'] += count * 10  # Strongest indicators
-                        elif keyword in ['family owned', 'locally owned', 'personal service', 'no booking fees']:
-                            scores['direct_rental_operator'] += count * 8
-                        else:
-                            scores['direct_rental_operator'] += count * 3
-                
-                # Additional signals for direct operators
-                # Look for specific property types
-                property_types = ['beach house', 'mountain cabin', 'lake house', 'ski chalet', 'downtown condo']
-                for prop_type in property_types:
-                    if prop_type in all_text:
-                        scores['direct_rental_operator'] += 3
-                
-                # Look for local area mentions (indicates local business)
-                location_phrases = ['located in', 'based in', 'serving', 'minutes from', 'close to', 'near']
-                for phrase in location_phrases:
-                    if phrase in all_text:
-                        scores['direct_rental_operator'] += 2
-                
-                # PENALTY: If listing detection found significant evidence, penalize direct operator score
-                if listing_detection['confidence'] > 50:
-                    scores['direct_rental_operator'] = max(0, scores['direct_rental_operator'] - listing_detection['confidence'] // 10)
-                
-                # Determine the winner
-                if max(scores.values()) == 0:
-                    return {
-                        'business_model': 'unknown',
-                        'exclusion_reason': None,
-                        'confidence': 0,
-                        'is_target_customer': True,  # Default to potential customer if unclear
-                        'scores': scores,
-                        'listing_detection': listing_detection
-                    }
-                
-                top_model = max(scores, key=scores.get)
-                top_score = scores[top_model]
-                confidence = min(95, (top_score / sum(scores.values()) * 100) if sum(scores.values()) > 0 else 0)
-                
-                # Special handling for third-party listings
-                if top_model == 'third_party_listing' or listing_detection['confidence'] > 60:
-                    return {
-                        'business_model': 'third_party_listing',
-                        'exclusion_reason': 'third_party_listing',
-                        'confidence': max(confidence, listing_detection['confidence']),
-                        'is_target_customer': False,
-                        'scores': scores,
-                        'listing_detection': listing_detection
-                    }
-                
-                # Determine if this is a target customer
-                is_target_customer = top_model == 'direct_rental_operator'
-                
-                # Get exclusion reason for non-targets
-                exclusion_reason = None
-                if not is_target_customer:
-                    exclusion_mapping = {
-                        'marketplace_platform': 'marketplace_platform',
-                        'b2b_service_provider': 'b2b_service_provider', 
-                        'marketing_service': 'marketing_service',
-                        'aggregator_site': 'aggregator_site',
-                        'third_party_listing': 'third_party_listing'
-                    }
-                    exclusion_reason = exclusion_mapping.get(top_model)
-                
-                return {
-                    'business_model': top_model,
-                    'exclusion_reason': exclusion_reason,
-                    'confidence': round(confidence),
-                    'is_target_customer': is_target_customer,
-                    'scores': scores,
-                    'listing_detection': listing_detection
-                }
-                
-            except Exception as e:
-                logger.error(f"Error classifying vacation rental business model: {e}")
+            
+            # Score different business models
+            scores = {
+                'marketplace_platform': 0,
+                'b2b_service_provider': 0,
+                'marketing_service': 0,
+                'aggregator_site': 0,
+                'direct_rental_operator': 0,
+                'third_party_listing': listing_detection['weighted_score'] if listing_detection['is_third_party_listing'] else 0
+            }
+            
+            # Check marketplace platform indicators
+            for keyword in self.vacation_rental_business_models['marketplace_platforms']['keywords']:
+                count = all_text.count(keyword)
+                if count > 0:
+                    if keyword in ['airbnb', 'vrbo', 'booking.com', 'expedia']:
+                        scores['marketplace_platform'] += count * 10  # Strong indicators
+                    else:
+                        scores['marketplace_platform'] += count * 3
+            
+            # Check B2B service provider indicators
+            for keyword in self.vacation_rental_business_models['b2b_service_providers']['keywords']:
+                count = all_text.count(keyword)
+                if count > 0:
+                    if keyword in ['property management software', 'vacation rental software', 'pms']:
+                        scores['b2b_service_provider'] += count * 8
+                    elif keyword in ['tools', 'software', 'platform', 'solution']:
+                        scores['b2b_service_provider'] += count * 4
+                    else:
+                        scores['b2b_service_provider'] += count * 2
+            
+            # Check marketing/lead gen indicators
+            for keyword in self.vacation_rental_business_models['marketing_lead_gen']['keywords']:
+                count = all_text.count(keyword)
+                if count > 0:
+                    scores['marketing_service'] += count * 3
+            
+            # Check aggregator indicators
+            for keyword in self.vacation_rental_business_models['aggregator_listing_sites']['keywords']:
+                count = all_text.count(keyword)
+                if count > 0:
+                    scores['aggregator_site'] += count * 3
+            
+            # Check for actual rental operator indicators
+            for keyword in self.vacation_rental_business_models['actual_rental_operators']['positive_indicators']:
+                count = all_text.count(keyword)
+                if count > 0:
+                    if keyword in ['our properties', 'our rentals', 'our vacation homes', 'direct owner', 'property owner']:
+                        scores['direct_rental_operator'] += count * 10  # Strongest indicators
+                    elif keyword in ['family owned', 'locally owned', 'personal service', 'no booking fees']:
+                        scores['direct_rental_operator'] += count * 8
+                    else:
+                        scores['direct_rental_operator'] += count * 3
+            
+            # Additional signals for direct operators
+            # Look for specific property types
+            property_types = ['beach house', 'mountain cabin', 'lake house', 'ski chalet', 'downtown condo']
+            for prop_type in property_types:
+                if prop_type in all_text:
+                    scores['direct_rental_operator'] += 3
+            
+            # Look for local area mentions (indicates local business)
+            location_phrases = ['located in', 'based in', 'serving', 'minutes from', 'close to', 'near']
+            for phrase in location_phrases:
+                if phrase in all_text:
+                    scores['direct_rental_operator'] += 2
+            
+            # PENALTY: If listing detection found significant evidence, penalize direct operator score
+            if listing_detection['confidence'] > 50:
+                scores['direct_rental_operator'] = max(0, scores['direct_rental_operator'] - listing_detection['confidence'] // 10)
+            
+            # Determine the winner
+            if max(scores.values()) == 0:
                 return {
                     'business_model': 'unknown',
                     'exclusion_reason': None,
                     'confidence': 0,
-                    'is_target_customer': True,
-                    'scores': {},
-                    'listing_detection': {}
+                    'is_target_customer': True,  # Default to potential customer if unclear
+                    'scores': scores,
+                    'listing_detection': listing_detection
                 }
-
-        def classify_company_size(self, soup, page_text, title, description):
-            """Enhanced company size classification with detailed analysis (prioritizing small businesses)"""
-            try:
-                all_text = (page_text + ' ' + (title or '') + ' ' + (description or '')).lower()
-                
-                # Initialize scores - SMALL BUSINESS GETS HIGHER MULTIPLIERS
-                large_score = 0
-                medium_score = 0
-                small_score = 0
-                
-                # Check for LARGE company indicators (these are red flags for vacation rental operators)
-                for category, keywords in self.large_company_indicators.items():
-                    for keyword in keywords:
-                        count = all_text.count(keyword)
-                        if count > 0:
-                            if category == 'listing_platform_keywords':
-                                large_score += count * 15  # Strong indicator of listing platform
-                            elif category == 'headquarters_indicators':
-                                large_score += count * 12  # Strong corporate indicator
-                            elif category == 'fortune_keywords':
-                                large_score += count * 10  # Public company indicator
-                            elif category == 'big_business_indicators':
-                                large_score += count * 8   # Corporate communications
-                            elif category == 'scale_indicators':
-                                large_score += count * 6
-                            elif category == 'corporate_structure':
-                                large_score += count * 4
-                            else:
-                                large_score += count * 3
-                
-                # Check for MEDIUM company indicators
-                for category, keywords in self.medium_company_indicators.items():
-                    for keyword in keywords:
-                        count = all_text.count(keyword)
-                        if count > 0:
-                            if category == 'medium_scale_indicators':
-                                medium_score += count * 4
-                            else:
-                                medium_score += count * 3
-                
-                # Check for SMALL company indicators (HIGHER SCORES - these are preferred!)
-                for category, keywords in self.small_company_indicators.items():
-                    for keyword in keywords:
-                        count = all_text.count(keyword)
-                        if count > 0:
-                            if category == 'authentic_small_business':
-                                small_score += count * 8  # Highest score for authentic small business
-                            elif category == 'local_business':
-                                small_score += count * 6  # High score for local business
-                            elif category == 'personal_touch':
-                                small_score += count * 6  # High score for personal service
-                            elif category == 'single_location_indicators':
-                                small_score += count * 5  # Good score for single location
-                            else:
-                                small_score += count * 4
-                
-                # Technology stack analysis
-                for keyword in self.tech_indicators['enterprise_tech']:
-                    if keyword in all_text:
-                        large_score += 8  # Enterprise tech = big business
-                
-                for keyword in self.tech_indicators['enterprise_hosting']:
-                    if keyword in all_text:
-                        large_score += 5
-                
-                for keyword in self.tech_indicators['small_business_tech']:
-                    if keyword in all_text:
-                        small_score += 6  # Small business tech = good sign
-                
-                # Enhanced website complexity analysis
-                website_metrics = self.analyze_detailed_website_metrics(soup)
-                complexity_score = website_metrics.get('complexity_score', 0)
-                
-                # Complexity scoring (simpler sites = smaller businesses = better for vacation rentals)
-                if complexity_score > 40:
-                    large_score += 15  # Very complex = likely big business
-                elif complexity_score > 25:
-                    large_score += 10  # Complex = medium to large business
-                elif complexity_score > 15:
-                    medium_score += 5  # Moderate complexity = medium business
-                else:
-                    small_score += 8   # Simple site = likely small business (GOOD!)
-                
-                # Analyze specific website metrics for size indicators
-                word_count = website_metrics.get('word_count', 0)
-                if word_count > 5000:
-                    large_score += 10  # Very large website = big business
-                elif word_count > 2000:
-                    medium_score += 5  # Large website = medium business
-                elif word_count < 500:
-                    small_score += 5   # Small website = small business (good sign)
-                
-                # Navigation complexity
-                nav_items = website_metrics.get('navigation_items', 0)
-                if nav_items > 50:
-                    large_score += 8   # Complex navigation = big business
-                elif nav_items > 20:
-                    medium_score += 4  # Moderate navigation = medium business
-                elif nav_items < 10:
-                    small_score += 4   # Simple navigation = small business
-                
-                # Social media presence analysis (enhanced)
-                social_score = self.analyze_social_presence(soup, all_text)
-                if social_score > 15:
-                    large_score += 5   # Heavy social presence = bigger business
-                elif social_score > 8:
-                    medium_score += 3  # Moderate social presence = medium business
-                elif social_score > 3:
-                    small_score += 2   # Light social presence = small business
-                
-                # Employee count indicators
-                employee_indicators = self.detect_employee_count(all_text)
-                if employee_indicators['size'] == 'large':
-                    large_score += 20  # Strong indicator of large business
-                elif employee_indicators['size'] == 'medium':
-                    medium_score += 10 # Medium business indicator
-                elif employee_indicators['size'] == 'small':
-                    small_score += 8   # Small team = good sign
-                
-                # Location analysis (multiple locations = bigger business)
-                location_score = self.analyze_locations(all_text)
-                if location_score > 10:
-                    large_score += location_score  # Many locations = big business
-                elif location_score > 5:
-                    medium_score += location_score # Several locations = medium business
-                elif location_score == 0:
-                    small_score += 3  # Single location implied = small business
-                
-                # Check for specific large business red flags
-                red_flags = [
-                    'api integration', 'enterprise api', 'developer portal', 'white label',
-                    'franchise opportunities', 'investor relations', 'press releases',
-                    'corporate partnerships', 'global expansion', 'ipo', 'acquisition'
-                ]
-                red_flag_count = sum(1 for flag in red_flags if flag in all_text)
-                if red_flag_count > 0:
-                    large_score += red_flag_count * 5
-                
-                # Determine final classification
-                total_score = large_score + medium_score + small_score
-                if total_score == 0:
-                    return {'size': 'unknown', 'confidence': 0, 'details': {}}
-                
-                # Calculate percentages
-                large_pct = (large_score / total_score) * 100
-                medium_pct = (medium_score / total_score) * 100
-                small_pct = (small_score / total_score) * 100
-                
-                # Determine classification (BIAS TOWARD SMALL BUSINESS)
-                if small_score > large_score and small_score > medium_score:
-                    size = 'small_business'
-                    confidence = min(95, small_pct + 10)  # Bonus confidence for small business
-                elif large_score > medium_score and large_score > small_score:
-                    size = 'large_enterprise'
-                    confidence = min(95, large_pct)
-                elif medium_score > 0:
-                    size = 'medium_business'
-                    confidence = min(90, medium_pct)
-                else:
-                    size = 'unknown'
-                    confidence = 0
-                
-                # Boost small business classification with additional rules
-                if small_score >= 15 and large_score < 10:
-                    size = 'small_business'
-                    confidence = min(95, confidence + 15)
-                
-                # Strong penalties for obvious large business indicators
-                if large_score >= 25:
-                    size = 'large_enterprise'
-                    confidence = min(95, confidence + 10)
-                
-                details = {
-                    'large_score': large_score,
-                    'medium_score': medium_score,
-                    'small_score': small_score,
-                    'employee_indicators': employee_indicators,
-                    'website_metrics': website_metrics,
-                    'social_score': social_score,
-                    'location_score': location_score,
-                    'red_flag_count': red_flag_count,
-                    'scoring_breakdown': {
-                        'large_percentage': round(large_pct, 1),
-                        'medium_percentage': round(medium_pct, 1),
-                        'small_percentage': round(small_pct, 1)
-                    }
-                }
-                
+            
+            top_model = max(scores, key=scores.get)
+            top_score = scores[top_model]
+            confidence = min(95, (top_score / sum(scores.values()) * 100) if sum(scores.values()) > 0 else 0)
+            
+            # Special handling for third-party listings
+            if top_model == 'third_party_listing' or listing_detection['confidence'] > 60:
                 return {
-                    'size': size,
-                    'confidence': round(confidence),
-                    'details': details
+                    'business_model': 'third_party_listing',
+                    'exclusion_reason': 'third_party_listing',
+                    'confidence': max(confidence, listing_detection['confidence']),
+                    'is_target_customer': False,
+                    'scores': scores,
+                    'listing_detection': listing_detection
                 }
-                
-            except Exception as e:
-                logger.error(f"Error classifying company size: {e}")
+            
+            # Determine if this is a target customer
+            is_target_customer = top_model == 'direct_rental_operator'
+            
+            # Get exclusion reason for non-targets
+            exclusion_reason = None
+            if not is_target_customer:
+                exclusion_mapping = {
+                    'marketplace_platform': 'marketplace_platform',
+                    'b2b_service_provider': 'b2b_service_provider', 
+                    'marketing_service': 'marketing_service',
+                    'aggregator_site': 'aggregator_site',
+                    'third_party_listing': 'third_party_listing'
+                }
+                exclusion_reason = exclusion_mapping.get(top_model)
+            
+            return {
+                'business_model': top_model,
+                'exclusion_reason': exclusion_reason,
+                'confidence': round(confidence),
+                'is_target_customer': is_target_customer,
+                'scores': scores,
+                'listing_detection': listing_detection
+            }
+            
+        except Exception as e:
+            logger.error(f"Error classifying vacation rental business model: {e}")
+            return {
+                'business_model': 'unknown',
+                'exclusion_reason': None,
+                'confidence': 0,
+                'is_target_customer': True,
+                'scores': {},
+                'listing_detection': {}
+            }
+
+    def classify_company_size(self, soup, page_text, title, description):
+        """Enhanced company size classification with detailed analysis (prioritizing small businesses)"""
+        try:
+            all_text = (page_text + ' ' + (title or '') + ' ' + (description or '')).lower()
+            
+            # Initialize scores - SMALL BUSINESS GETS HIGHER MULTIPLIERS
+            large_score = 0
+            medium_score = 0
+            small_score = 0
+            
+            # Check for LARGE company indicators (these are red flags for vacation rental operators)
+            for category, keywords in self.large_company_indicators.items():
+                for keyword in keywords:
+                    count = all_text.count(keyword)
+                    if count > 0:
+                        if category == 'listing_platform_keywords':
+                            large_score += count * 15  # Strong indicator of listing platform
+                        elif category == 'headquarters_indicators':
+                            large_score += count * 12  # Strong corporate indicator
+                        elif category == 'fortune_keywords':
+                            large_score += count * 10  # Public company indicator
+                        elif category == 'big_business_indicators':
+                            large_score += count * 8   # Corporate communications
+                        elif category == 'scale_indicators':
+                            large_score += count * 6
+                        elif category == 'corporate_structure':
+                            large_score += count * 4
+                        else:
+                            large_score += count * 3
+            
+            # Check for MEDIUM company indicators
+            for category, keywords in self.medium_company_indicators.items():
+                for keyword in keywords:
+                    count = all_text.count(keyword)
+                    if count > 0:
+                        if category == 'medium_scale_indicators':
+                            medium_score += count * 4
+                        else:
+                            medium_score += count * 3
+            
+            # Check for SMALL company indicators (HIGHER SCORES - these are preferred!)
+            for category, keywords in self.small_company_indicators.items():
+                for keyword in keywords:
+                    count = all_text.count(keyword)
+                    if count > 0:
+                        if category == 'authentic_small_business':
+                            small_score += count * 8  # Highest score for authentic small business
+                        elif category == 'local_business':
+                            small_score += count * 6  # High score for local business
+                        elif category == 'personal_touch':
+                            small_score += count * 6  # High score for personal service
+                        elif category == 'single_location_indicators':
+                            small_score += count * 5  # Good score for single location
+                        else:
+                            small_score += count * 4
+            
+            # Technology stack analysis
+            for keyword in self.tech_indicators['enterprise_tech']:
+                if keyword in all_text:
+                    large_score += 8  # Enterprise tech = big business
+            
+            for keyword in self.tech_indicators['enterprise_hosting']:
+                if keyword in all_text:
+                    large_score += 5
+            
+            for keyword in self.tech_indicators['small_business_tech']:
+                if keyword in all_text:
+                    small_score += 6  # Small business tech = good sign
+            
+            # Enhanced website complexity analysis
+            website_metrics = self.analyze_detailed_website_metrics(soup)
+            complexity_score = website_metrics.get('complexity_score', 0)
+            
+            # Complexity scoring (simpler sites = smaller businesses = better for vacation rentals)
+            if complexity_score > 40:
+                large_score += 15  # Very complex = likely big business
+            elif complexity_score > 25:
+                large_score += 10  # Complex = medium to large business
+            elif complexity_score > 15:
+                medium_score += 5  # Moderate complexity = medium business
+            else:
+                small_score += 8   # Simple site = likely small business (GOOD!)
+            
+            # Analyze specific website metrics for size indicators
+            word_count = website_metrics.get('word_count', 0)
+            if word_count > 5000:
+                large_score += 10  # Very large website = big business
+            elif word_count > 2000:
+                medium_score += 5  # Large website = medium business
+            elif word_count < 500:
+                small_score += 5   # Small website = small business (good sign)
+            
+            # Navigation complexity
+            nav_items = website_metrics.get('navigation_items', 0)
+            if nav_items > 50:
+                large_score += 8   # Complex navigation = big business
+            elif nav_items > 20:
+                medium_score += 4  # Moderate navigation = medium business
+            elif nav_items < 10:
+                small_score += 4   # Simple navigation = small business
+            
+            # Social media presence analysis (enhanced)
+            social_score = self.analyze_social_presence(soup, all_text)
+            if social_score > 15:
+                large_score += 5   # Heavy social presence = bigger business
+            elif social_score > 8:
+                medium_score += 3  # Moderate social presence = medium business
+            elif social_score > 3:
+                small_score += 2   # Light social presence = small business
+            
+            # Employee count indicators
+            employee_indicators = self.detect_employee_count(all_text)
+            if employee_indicators['size'] == 'large':
+                large_score += 20  # Strong indicator of large business
+            elif employee_indicators['size'] == 'medium':
+                medium_score += 10 # Medium business indicator
+            elif employee_indicators['size'] == 'small':
+                small_score += 8   # Small team = good sign
+            
+            # Location analysis (multiple locations = bigger business)
+            location_score = self.analyze_locations(all_text)
+            if location_score > 10:
+                large_score += location_score  # Many locations = big business
+            elif location_score > 5:
+                medium_score += location_score # Several locations = medium business
+            elif location_score == 0:
+                small_score += 3  # Single location implied = small business
+            
+            # Check for specific large business red flags
+            red_flags = [
+                'api integration', 'enterprise api', 'developer portal', 'white label',
+                'franchise opportunities', 'investor relations', 'press releases',
+                'corporate partnerships', 'global expansion', 'ipo', 'acquisition'
+            ]
+            red_flag_count = sum(1 for flag in red_flags if flag in all_text)
+            if red_flag_count > 0:
+                large_score += red_flag_count * 5
+            
+            # Determine final classification
+            total_score = large_score + medium_score + small_score
+            if total_score == 0:
                 return {'size': 'unknown', 'confidence': 0, 'details': {}}
-        
-        def analyze_website_complexity(self, soup):
-            """Analyze website complexity as an indicator of company size"""
-            try:
-                score = 0
-                
-                # Navigation complexity
-                nav_items = soup.find_all(['nav', 'ul', 'li'])
-                if len(nav_items) > 20:
-                    score += 5
-                elif len(nav_items) > 10:
-                    score += 3
-                
-                # Page structure
-                sections = soup.find_all(['section', 'div', 'article'])
-                if len(sections) > 50:
-                    score += 4
-                elif len(sections) > 25:
-                    score += 2
-                
-                # Forms and interactive elements
-                forms = soup.find_all(['form', 'input', 'select', 'textarea'])
-                if len(forms) > 15:
-                    score += 3
-                elif len(forms) > 8:
-                    score += 2
-                
-                # External resources (scripts, stylesheets)
-                scripts = soup.find_all('script', src=True)
-                stylesheets = soup.find_all('link', rel='stylesheet')
-                if len(scripts) + len(stylesheets) > 20:
-                    score += 4
-                elif len(scripts) + len(stylesheets) > 10:
-                    score += 2
-                
-                # Advanced features
-                if soup.find(['video', 'audio', 'canvas', 'svg']):
-                    score += 2
-                
-                return score
-                
-            except Exception:
-                return 0
-        
-        def analyze_social_presence(self, soup, page_text):
-            """Analyze social media presence"""
-            try:
-                score = 0
-                social_platforms = [
-                    'facebook', 'twitter', 'linkedin', 'instagram', 'youtube',
-                    'tiktok', 'pinterest', 'snapchat', 'telegram', 'whatsapp'
-                ]
-                
-                # Check for social media links
-                links = soup.find_all('a', href=True)
-                social_links = set()
-                
-                for link in links:
-                    href = link.get('href', '').lower()
-                    for platform in social_platforms:
-                        if platform in href:
-                            social_links.add(platform)
-                
-                # Score based on number of platforms
-                score += len(social_links) * 2
-                
-                # Check for social sharing buttons
-                social_sharing_indicators = ['share', 'tweet', 'like', 'follow']
-                for indicator in social_sharing_indicators:
-                    if indicator in page_text:
-                        score += 1
-                
-                return score
-                
-            except Exception:
-                return 0
-        
-        def detect_employee_count(self, text):
-            """Detect employee count indicators"""
-            try:
-                # Look for specific employee count mentions
-                employee_patterns = [
-                    (r'(\d+),?(\d+)?\+?\s*employees', 'count'),
-                    (r'over\s+(\d+),?(\d+)?\s*employees', 'over'),
-                    (r'more than\s+(\d+),?(\d+)?\s*employees', 'over'),
-                    (r'(\d+),?(\d+)?\+?\s*team members', 'count'),
-                    (r'(\d+),?(\d+)?\+?\s*staff', 'count')
-                ]
-                
-                for pattern, type_indicator in employee_patterns:
-                    matches = re.findall(pattern, text, re.IGNORECASE)
-                    if matches:
-                        for match in matches:
-                            try:
-                                # Handle tuple from regex groups
-                                if isinstance(match, tuple):
-                                    num_str = ''.join(match).replace(',', '')
-                                else:
-                                    num_str = str(match).replace(',', '')
-                                
-                                if num_str.isdigit():
-                                    count = int(num_str)
-                                    if count >= 1000:
-                                        return {'size': 'large', 'count': count, 'type': type_indicator}
-                                    elif count >= 50:
-                                        return {'size': 'medium', 'count': count, 'type': type_indicator}
-                                    elif count >= 1:
-                                        return {'size': 'small', 'count': count, 'type': type_indicator}
-                            except (ValueError, TypeError):
-                                continue
-                
-                # Look for general size indicators
-                if any(indicator in text for indicator in ['thousands of employees', 'million employees']):
-                    return {'size': 'large', 'count': None, 'type': 'estimate'}
-                elif any(indicator in text for indicator in ['hundreds of employees', 'large team']):
-                    return {'size': 'medium', 'count': None, 'type': 'estimate'}
-                elif any(indicator in text for indicator in ['small team', 'boutique', 'family business']):
-                    return {'size': 'small', 'count': None, 'type': 'estimate'}
-                
-                return {'size': None, 'count': None, 'type': None}
-                
-            except Exception:
-                return {'size': None, 'count': None, 'type': None}
-        
-        def analyze_locations(self, text):
-            """Analyze number of locations/offices"""
-            try:
-                score = 0
-                
-                # Look for multiple locations
-                location_patterns = [
-                    r'(\d+)\s*offices?',
-                    r'(\d+)\s*locations?',
-                    r'(\d+)\s*branches?',
-                    r'(\d+)\s*stores?',
-                    r'(\d+)\s*facilities',
-                    r'(\d+)\s*countries',
-                    r'(\d+)\s*states'
-                ]
-                
-                for pattern in location_patterns:
-                    matches = re.findall(pattern, text, re.IGNORECASE)
-                    for match in matches:
-                        try:
-                            count = int(match)
-                            if count >= 100:
-                                score += 8
-                            elif count >= 50:
-                                score += 6
-                            elif count >= 10:
-                                score += 4
-                            elif count >= 5:
-                                score += 2
-                            elif count >= 2:
-                                score += 1
-                        except ValueError:
-                            continue
-                
-                # Look for global presence indicators
-                global_indicators = [
-                    'worldwide', 'global presence', 'international offices',
-                    'offices around the world', 'global locations'
-                ]
-                
-                for indicator in global_indicators:
-                    if indicator in text:
-                        score += 3
-                
-                return score
-                
-            except Exception:
-                return 0
-
-        def classify_industry(self, page_text, title, description):
-            """Classify industry type"""
-            try:
-                all_text = (page_text + ' ' + (title or '') + ' ' + (description or '')).lower()
-                industry_scores = {}
-                
-                for industry, keywords in self.industry_keywords.items():
-                    score = 0
-                    for keyword in keywords:
-                        if keyword in all_text:
-                            frequency = all_text.count(keyword)
-                            if title and keyword in title.lower():
-                                score += frequency * 3
-                            elif description and keyword in description.lower():
-                                score += frequency * 2
-                            else:
-                                score += frequency
-                    
-                    if score > 0:
-                        industry_scores[industry] = score
-                
-                if not industry_scores:
-                    return {'industry': 'general_business', 'confidence': 0}
-                
-                top_industry = max(industry_scores, key=industry_scores.get)
-                top_score = industry_scores[top_industry]
-                confidence = min(95, top_score * 10)
-                
-                return {'industry': top_industry, 'confidence': round(confidence)}
-                
-            except Exception as e:
-                logger.error(f"Error classifying industry: {e}")
-                return {'industry': 'unknown', 'confidence': 0}
-
-        def is_business_website(self, soup, page_text):
-            """Check if it's a business website"""
-            business_indicators = [
-                'about us', 'contact us', 'services', 'products', 'company',
-                'business', 'team', 'careers', 'support', 'customer',
-                'phone', 'email', 'address', 'location', 'hours'
-            ]
             
-            nav_elements = soup.find_all(['nav', 'menu'])
-            has_navigation = len(nav_elements) > 0
+            # Calculate percentages
+            large_pct = (large_score / total_score) * 100
+            medium_pct = (medium_score / total_score) * 100
+            small_pct = (small_score / total_score) * 100
             
-            business_content_count = sum(1 for indicator in business_indicators if indicator in page_text)
+            # Determine classification (BIAS TOWARD SMALL BUSINESS)
+            if small_score > large_score and small_score > medium_score:
+                size = 'small_business'
+                confidence = min(95, small_pct + 10)  # Bonus confidence for small business
+            elif large_score > medium_score and large_score > small_score:
+                size = 'large_enterprise'
+                confidence = min(95, large_pct)
+            elif medium_score > 0:
+                size = 'medium_business'
+                confidence = min(90, medium_pct)
+            else:
+                size = 'unknown'
+                confidence = 0
             
-            has_contact = bool(re.search(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', page_text) or 
-                              re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', page_text))
+            # Boost small business classification with additional rules
+            if small_score >= 15 and large_score < 10:
+                size = 'small_business'
+                confidence = min(95, confidence + 15)
             
+            # Strong penalties for obvious large business indicators
+            if large_score >= 25:
+                size = 'large_enterprise'
+                confidence = min(95, confidence + 10)
+            
+            details = {
+                'large_score': large_score,
+                'medium_score': medium_score,
+                'small_score': small_score,
+                'employee_indicators': employee_indicators,
+                'website_metrics': website_metrics,
+                'social_score': social_score,
+                'location_score': location_score,
+                'red_flag_count': red_flag_count,
+                'scoring_breakdown': {
+                    'large_percentage': round(large_pct, 1),
+                    'medium_percentage': round(medium_pct, 1),
+                    'small_percentage': round(small_pct, 1)
+                }
+            }
+            
+            return {
+                'size': size,
+                'confidence': round(confidence),
+                'details': details
+            }
+            
+        except Exception as e:
+            logger.error(f"Error classifying company size: {e}")
+            return {'size': 'unknown', 'confidence': 0, 'details': {}}
+    
+    def analyze_website_complexity(self, soup):
+        """Analyze website complexity as an indicator of company size"""
+        try:
             score = 0
-            if has_navigation: score += 2
-            if business_content_count >= 3: score += 2
-            if has_contact: score += 2
-            if len(page_text.split()) > 100: score += 1
             
-            return score >= 4
-
-        def extract_business_info(self, soup):
-            """Extract comprehensive business information including contact details, social media, and location"""
-            info = {}
-            page_text = soup.get_text()
+            # Navigation complexity
+            nav_items = soup.find_all(['nav', 'ul', 'li'])
+            if len(nav_items) > 20:
+                score += 5
+            elif len(nav_items) > 10:
+                score += 3
             
-            # Company name - try multiple sources
-            company_name = None
-            h1_tags = soup.find_all('h1')
-            if h1_tags:
-                company_name = h1_tags[0].get_text().strip()
+            # Page structure
+            sections = soup.find_all(['section', 'div', 'article'])
+            if len(sections) > 50:
+                score += 4
+            elif len(sections) > 25:
+                score += 2
             
-            # Try title tag if h1 is not descriptive
-            title_tag = soup.find('title')
-            if title_tag and (not company_name or len(company_name) < 3):
-                title_text = title_tag.get_text().strip()
-                # Clean up common title suffixes
-                for suffix in [' - Home', ' | Home', ' - Welcome', ' | Welcome']:
-                    if suffix in title_text:
-                        title_text = title_text.replace(suffix, '')
-                company_name = title_text
+            # Forms and interactive elements
+            forms = soup.find_all(['form', 'input', 'select', 'textarea'])
+            if len(forms) > 15:
+                score += 3
+            elif len(forms) > 8:
+                score += 2
             
-            info['company_name'] = company_name or ''
+            # External resources (scripts, stylesheets)
+            scripts = soup.find_all('script', src=True)
+            stylesheets = soup.find_all('link', rel='stylesheet')
+            if len(scripts) + len(stylesheets) > 20:
+                score += 4
+            elif len(scripts) + len(stylesheets) > 10:
+                score += 2
             
-            # Extract all emails
-            emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', page_text)
-            # Filter out common generic emails and keep unique ones
-            filtered_emails = []
-            generic_prefixes = ['info', 'contact', 'admin', 'support', 'hello', 'mail', 'office']
-            for email in set(emails):  # Remove duplicates
-                email_lower = email.lower()
-                # Skip obviously fake or generic emails
-                if not any(skip in email_lower for skip in ['noreply', 'donotreply', 'example', 'test', 'spam']):
-                    filtered_emails.append(email)
+            # Advanced features
+            if soup.find(['video', 'audio', 'canvas', 'svg']):
+                score += 2
             
-            info['emails'] = filtered_emails[:5]  # Limit to 5 emails
-            info['primary_email'] = filtered_emails[0] if filtered_emails else ''
+            return score
             
-            # Extract all phone numbers with better patterns
-            phone_patterns = [
-                r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # US format
-                r'\(\d{3}\)\s?\d{3}[-.\s]?\d{4}',      # (123) 456-7890
-                r'\b\d{3}\.\d{3}\.\d{4}\b',            # 123.456.7890
-                r'\+\d{1,3}[-.\s]?\d{3,4}[-.\s]?\d{3,4}[-.\s]?\d{3,4}',  # International
+        except Exception:
+            return 0
+    
+    def analyze_social_presence(self, soup, page_text):
+        """Analyze social media presence"""
+        try:
+            score = 0
+            social_platforms = [
+                'facebook', 'twitter', 'linkedin', 'instagram', 'youtube',
+                'tiktok', 'pinterest', 'snapchat', 'telegram', 'whatsapp'
             ]
             
-            phones = []
-            for pattern in phone_patterns:
-                phones.extend(re.findall(pattern, page_text))
-            
-            # Clean and deduplicate phones
-            cleaned_phones = []
-            for phone in set(phones):
-                # Remove common non-phone numbers
-                if not any(skip in phone for skip in ['111-111-1111', '123-456-7890', '000-000-0000']):
-                    cleaned_phones.append(phone.strip())
-            
-            info['phones'] = cleaned_phones[:3]  # Limit to 3 phones
-            info['primary_phone'] = cleaned_phones[0] if cleaned_phones else ''
-            
-            # Extract physical address
-            address = self.extract_address(soup, page_text)
-            info['address'] = address
-            
-            # Extract location and country information
-            location_info = self.extract_location_and_country(soup, page_text, address)
-            info.update(location_info)
-            
-            # Extract social media links
-            social_media = self.extract_social_media_links(soup)
-            info['social_media'] = social_media
-            
-            # Extract business hours
-            hours = self.extract_business_hours(page_text)
-            info['business_hours'] = hours
-            
-            # Check for online booking/reservation systems
-            booking_indicators = ['book now', 'reserve now', 'schedule appointment', 'book online', 'make reservation']
-            info['has_online_booking'] = any(indicator in page_text.lower() for indicator in booking_indicators)
-            
-            # Extract website complexity metrics
-            info['website_metrics'] = self.analyze_detailed_website_metrics(soup)
-            
-            return info
-
-        def extract_address(self, soup, page_text):
-            """Extract physical address from webpage"""
-            address_patterns = [
-                # Street address patterns
-                r'\d+\s+[A-Za-z0-9\s,.-]+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Way|Court|Ct|Place|Pl)\s*,?\s*[A-Za-z\s]+,?\s*[A-Z]{2}\s+\d{5}',
-                r'\d+\s+[A-Za-z0-9\s,.-]+,\s*[A-Za-z\s]+,\s*[A-Z]{2}\s+\d{5}',
-                # PO Box patterns
-                r'P\.?O\.?\s+Box\s+\d+,?\s*[A-Za-z\s]+,?\s*[A-Z]{2}\s+\d{5}',
-            ]
-            
-            for pattern in address_patterns:
-                matches = re.findall(pattern, page_text, re.IGNORECASE)
-                if matches:
-                    # Return the first reasonable looking address
-                    for match in matches:
-                        if len(match) > 20:  # Reasonable address length
-                            return match.strip()
-            
-            # Try to find address in structured data or contact sections
-            contact_sections = soup.find_all(['div', 'section'], class_=re.compile(r'contact|address|location', re.I))
-            for section in contact_sections:
-                section_text = section.get_text()
-                for pattern in address_patterns:
-                    matches = re.findall(pattern, section_text, re.IGNORECASE)
-                    if matches:
-                        return matches[0].strip()
-            
-            return ''
-
-        def extract_location_and_country(self, soup, page_text, address):
-            """Extract detailed location and country information"""
-            location_info = {
-                'country': '',
-                'country_confidence': 0,
-                'state_province': '',
-                'city': '',
-                'local_area': '',
-                'serves_locations': [],
-                'location_indicators': []
-            }
-            
-            try:
-                # Country detection patterns
-                country_patterns = {
-                    'United States': {
-                        'patterns': [
-                            r'\b(?:USA|United States|US|America)\b',
-                            r'\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b',  # US ZIP codes
-                            r'\b(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\s+\d{5}\b',
-                        ],
-                        'indicators': ['USD', 'dollars', 'ZIP', 'state', 'county'],
-                        'states': ['Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming']
-                    },
-                    'Canada': {
-                        'patterns': [
-                            r'\bCanada\b',
-                            r'\b[A-Z]\d[A-Z]\s*\d[A-Z]\d\b',  # Canadian postal codes
-                            r'\b(?:AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT)\b',
-                        ],
-                        'indicators': ['CAD', 'Canadian', 'province', 'postal code'],
-                        'provinces': ['Alberta', 'British Columbia', 'Manitoba', 'New Brunswick', 'Newfoundland and Labrador', 'Northwest Territories', 'Nova Scotia', 'Nunavut', 'Ontario', 'Prince Edward Island', 'Quebec', 'Saskatchewan', 'Yukon']
-                    },
-                    'United Kingdom': {
-                        'patterns': [
-                            r'\b(?:UK|United Kingdom|Britain|England|Scotland|Wales|Northern Ireland)\b',
-                            r'\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b',  # UK postcodes
-                        ],
-                        'indicators': ['£', 'GBP', 'pounds', 'postcode', 'shire', 'county'],
-                        'regions': ['England', 'Scotland', 'Wales', 'Northern Ireland']
-                    },
-                    'Australia': {
-                        'patterns': [
-                            r'\bAustralia\b',
-                            r'\b\d{4}\s*(?:NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\b',
-                        ],
-                        'indicators': ['AUD', 'Australian', 'postcode'],
-                        'states': ['New South Wales', 'Victoria', 'Queensland', 'Western Australia', 'South Australia', 'Tasmania', 'Australian Capital Territory', 'Northern Territory']
-                    },
-                    'Germany': {
-                        'patterns': [
-                            r'\bDeutschland\b|\bGermany\b',
-                            r'\b\d{5}\s*(?:Germany|Deutschland)\b',
-                        ],
-                        'indicators': ['EUR', '€', 'euros', 'German'],
-                        'regions': ['Bavaria', 'Baden-Württemberg', 'North Rhine-Westphalia', 'Berlin', 'Hamburg']
-                    },
-                    'France': {
-                        'patterns': [
-                            r'\bFrance\b|\bFrançais\b',
-                            r'\b\d{5}\s*France\b',
-                        ],
-                        'indicators': ['EUR', '€', 'euros', 'French'],
-                        'regions': ['Paris', 'Lyon', 'Marseille', 'Toulouse', 'Nice']
-                    },
-                    'Spain': {
-                        'patterns': [
-                            r'\bSpain\b|\bEspaña\b',
-                            r'\b\d{5}\s*Spain\b',
-                        ],
-                        'indicators': ['EUR', '€', 'euros', 'Spanish'],
-                        'regions': ['Madrid', 'Barcelona', 'Valencia', 'Seville', 'Bilbao']
-                    },
-                    'Italy': {
-                        'patterns': [
-                            r'\bItaly\b|\bItalia\b',
-                            r'\b\d{5}\s*Italy\b',
-                        ],
-                        'indicators': ['EUR', '€', 'euros', 'Italian'],
-                        'regions': ['Rome', 'Milan', 'Naples', 'Turin', 'Florence']
-                    },
-                    'Netherlands': {
-                        'patterns': [
-                            r'\bNetherlands\b|\bHolland\b',
-                            r'\b\d{4}\s*[A-Z]{2}\s*Netherlands\b',
-                        ],
-                        'indicators': ['EUR', '€', 'euros', 'Dutch'],
-                        'regions': ['Amsterdam', 'Rotterdam', 'The Hague', 'Utrecht']
-                    },
-                    'Mexico': {
-                        'patterns': [
-                            r'\bMexico\b|\bMéxico\b',
-                            r'\b\d{5}\s*Mexico\b',
-                        ],
-                        'indicators': ['MXN', 'pesos', 'Mexican'],
-                        'regions': ['Mexico City', 'Guadalajara', 'Monterrey', 'Cancun', 'Puerto Vallarta']
-                    }
-                }
-                
-                text_lower = page_text.lower()
-                country_scores = {}
-                
-                # Score countries based on patterns and indicators
-                for country, data in country_patterns.items():
-                    score = 0
-                    
-                    # Check patterns
-                    for pattern in data['patterns']:
-                        matches = len(re.findall(pattern, page_text, re.IGNORECASE))
-                        if matches > 0:
-                            score += matches * 10
-                    
-                    # Check indicators
-                    for indicator in data['indicators']:
-                        if indicator.lower() in text_lower:
-                            score += 5
-                    
-                    # Check states/provinces/regions
-                    for region in data.get('states', data.get('provinces', data.get('regions', []))):
-                        if region.lower() in text_lower:
-                            score += 8
-                            location_info['state_province'] = region
-                    
-                    if score > 0:
-                        country_scores[country] = score
-                
-                # Additional country detection from address
-                if address:
-                    address_lower = address.lower()
-                    for country, data in country_patterns.items():
-                        for pattern in data['patterns']:
-                            if re.search(pattern, address, re.IGNORECASE):
-                                country_scores[country] = country_scores.get(country, 0) + 15
-                
-                # Domain-based country detection
-                domain_tlds = {
-                    '.uk': 'United Kingdom',
-                    '.co.uk': 'United Kingdom',
-                    '.ca': 'Canada',
-                    '.au': 'Australia',
-                    '.com.au': 'Australia',
-                    '.de': 'Germany',
-                    '.fr': 'France',
-                    '.es': 'Spain',
-                    '.it': 'Italy',
-                    '.nl': 'Netherlands',
-                    '.mx': 'Mexico',
-                    '.com.mx': 'Mexico'
-                }
-                
-                # Check current page URL for TLD
-                current_url = soup.find('link', {'rel': 'canonical'})
-                if current_url:
-                    url = current_url.get('href', '')
-                    for tld, country in domain_tlds.items():
-                        if tld in url:
-                            country_scores[country] = country_scores.get(country, 0) + 12
-                
-                # Determine best country match
-                if country_scores:
-                    best_country = max(country_scores, key=country_scores.get)
-                    best_score = country_scores[best_country]
-                    total_score = sum(country_scores.values())
-                    confidence = min(95, (best_score / total_score) * 100) if total_score > 0 else 0
-                    
-                    location_info['country'] = best_country
-                    location_info['country_confidence'] = round(confidence)
-                
-                # Extract cities and local areas
-                location_info['city'] = self.extract_city_names(page_text, location_info['country'])
-                location_info['local_area'] = self.extract_local_areas(page_text)
-                location_info['serves_locations'] = self.extract_service_areas(page_text)
-                
-                # Compile location indicators found
-                location_indicators = []
-                for country, data in country_patterns.items():
-                    if country in country_scores:
-                        for indicator in data['indicators']:
-                            if indicator.lower() in text_lower:
-                                location_indicators.append(indicator)
-                
-                location_info['location_indicators'] = list(set(location_indicators))
-                
-            except Exception as e:
-                logger.error(f"Error extracting location information: {e}")
-            
-            return location_info
-
-        def extract_city_names(self, page_text, country):
-            """Extract city names based on country context"""
-            cities = []
-            
-            # Common city patterns by country
-            city_databases = {
-                'United States': [
-                    'New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix', 'Philadelphia',
-                    'San Antonio', 'San Diego', 'Dallas', 'San Jose', 'Austin', 'Jacksonville',
-                    'Fort Worth', 'Columbus', 'Charlotte', 'San Francisco', 'Indianapolis',
-                    'Seattle', 'Denver', 'Washington', 'Boston', 'El Paso', 'Nashville',
-                    'Detroit', 'Oklahoma City', 'Portland', 'Las Vegas', 'Memphis', 'Louisville',
-                    'Baltimore', 'Milwaukee', 'Albuquerque', 'Tucson', 'Fresno', 'Sacramento',
-                    'Mesa', 'Kansas City', 'Atlanta', 'Long Beach', 'Colorado Springs', 'Raleigh',
-                    'Miami', 'Virginia Beach', 'Omaha', 'Oakland', 'Minneapolis', 'Tulsa',
-                    'Arlington', 'Tampa', 'New Orleans', 'Wichita', 'Cleveland', 'Bakersfield'
-                ],
-                'Canada': [
-                    'Toronto', 'Montreal', 'Vancouver', 'Calgary', 'Edmonton', 'Ottawa',
-                    'Winnipeg', 'Quebec City', 'Hamilton', 'Kitchener', 'London', 'Victoria',
-                    'Halifax', 'Oshawa', 'Windsor', 'Saskatoon', 'St. Catharines', 'Regina',
-                    'Kelowna', 'Barrie', 'Sherbrooke', 'Guelph', 'Kanata', 'Abbotsford'
-                ],
-                'United Kingdom': [
-                    'London', 'Birmingham', 'Manchester', 'Glasgow', 'Liverpool', 'Edinburgh',
-                    'Leeds', 'Sheffield', 'Bristol', 'Cardiff', 'Leicester', 'Belfast',
-                    'Nottingham', 'Newcastle', 'Brighton', 'Hull', 'Plymouth', 'Stoke',
-                    'Wolverhampton', 'Derby', 'Swansea', 'Southampton', 'Salford', 'Aberdeen'
-                ],
-                'Australia': [
-                    'Sydney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaide', 'Gold Coast',
-                    'Newcastle', 'Canberra', 'Sunshine Coast', 'Wollongong', 'Geelong',
-                    'Hobart', 'Townsville', 'Cairns', 'Darwin', 'Toowoomba', 'Ballarat'
-                ]
-            }
-            
-            if country in city_databases:
-                text_lower = page_text.lower()
-                for city in city_databases[country]:
-                    if city.lower() in text_lower:
-                        cities.append(city)
-            
-            # Generic city pattern detection
-            city_patterns = [
-                r'\bin\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
-                r'\blocated\s+in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
-                r'\bserving\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
-                r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?),\s*[A-Z]{2}\b'
-            ]
-            
-            for pattern in city_patterns:
-                matches = re.findall(pattern, page_text)
-                for match in matches:
-                    if isinstance(match, tuple):
-                        match = match[0]
-                    if len(match) > 2 and match not in cities:
-                        cities.append(match)
-            
-            return ', '.join(cities[:3])  # Return top 3 cities
-
-        def extract_local_areas(self, page_text):
-            """Extract local area indicators"""
-            local_patterns = [
-                r'\bdowntown\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
-                r'\bnear\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
-                r'\bclose\s+to\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
-                r'\bminutes\s+from\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
-                r'\bin\s+the\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+area\b',
-                r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+neighborhood\b'
-            ]
-            
-            local_areas = []
-            for pattern in local_patterns:
-                matches = re.findall(pattern, page_text, re.IGNORECASE)
-                for match in matches:
-                    if isinstance(match, tuple):
-                        match = match[0]
-                    if len(match) > 2 and match not in local_areas:
-                        local_areas.append(match)
-            
-            return ', '.join(local_areas[:3])
-
-        def extract_service_areas(self, page_text):
-            """Extract areas served by the business"""
-            service_patterns = [
-                r'\bserving\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)*)\b',
-                r'\bwe\s+serve\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)*)\b',
-                r'\bavailable\s+in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)*)\b',
-                r'\bdelivering\s+to\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)*)\b'
-            ]
-            
-            service_areas = []
-            for pattern in service_patterns:
-                matches = re.findall(pattern, page_text, re.IGNORECASE)
-                for match in matches:
-                    areas = [area.strip() for area in match.split(',')]
-                    service_areas.extend(areas)
-            
-            return list(set(service_areas[:5]))  # Return unique areas, max 5
-
-        def extract_social_media_links(self, soup):
-            """Extract social media links from webpage"""
-            social_platforms = {
-                'facebook': ['facebook.com', 'fb.com'],
-                'twitter': ['twitter.com', 'x.com'],
-                'instagram': ['instagram.com'],
-                'linkedin': ['linkedin.com'],
-                'youtube': ['youtube.com', 'youtu.be'],
-                'tiktok': ['tiktok.com'],
-                'pinterest': ['pinterest.com'],
-                'snapchat': ['snapchat.com'],
-                'whatsapp': ['whatsapp.com', 'wa.me'],
-                'telegram': ['telegram.me', 't.me']
-            }
-            
-            social_links = {}
+            # Check for social media links
             links = soup.find_all('a', href=True)
+            social_links = set()
             
             for link in links:
                 href = link.get('href', '').lower()
-                for platform, domains in social_platforms.items():
-                    if any(domain in href for domain in domains):
-                        # Clean up the URL
-                        if href.startswith('//'):
-                            href = 'https:' + href
-                        elif href.startswith('/'):
-                            continue  # Skip relative links
-                        
-                        social_links[platform] = href
-                        break
+                for platform in social_platforms:
+                    if platform in href:
+                        social_links.add(platform)
             
-            return social_links
-
-        def extract_business_hours(self, page_text):
-            """Extract business hours from webpage text"""
-            # Common business hours patterns
-            hours_patterns = [
-                r'(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*[:\s-]*\s*\d{1,2}[:\s]*\d{0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?[\s-]*\d{1,2}[:\s]*\d{0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?',
-                r'hours?\s*:?\s*\d{1,2}[:\s]*\d{0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?[\s-]*\d{1,2}[:\s]*\d{0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?',
-                r'open\s*:?\s*\d{1,2}[:\s]*\d{0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?[\s-]*\d{1,2}[:\s]*\d{0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?'
+            # Score based on number of platforms
+            score += len(social_links) * 2
+            
+            # Check for social sharing buttons
+            social_sharing_indicators = ['share', 'tweet', 'like', 'follow']
+            for indicator in social_sharing_indicators:
+                if indicator in page_text:
+                    score += 1
+            
+            return score
+            
+        except Exception:
+            return 0
+    
+    def detect_employee_count(self, text):
+        """Detect employee count indicators"""
+        try:
+            # Look for specific employee count mentions
+            employee_patterns = [
+                (r'(\d+),?(\d+)?\+?\s*employees', 'count'),
+                (r'over\s+(\d+),?(\d+)?\s*employees', 'over'),
+                (r'more than\s+(\d+),?(\d+)?\s*employees', 'over'),
+                (r'(\d+),?(\d+)?\+?\s*team members', 'count'),
+                (r'(\d+),?(\d+)?\+?\s*staff', 'count')
             ]
             
-            hours_text = []
-            text_lower = page_text.lower()
+            for pattern, type_indicator in employee_patterns:
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                if matches:
+                    for match in matches:
+                        try:
+                            # Handle tuple from regex groups
+                            if isinstance(match, tuple):
+                                num_str = ''.join(match).replace(',', '')
+                            else:
+                                num_str = str(match).replace(',', '')
+                            
+                            if num_str.isdigit():
+                                count = int(num_str)
+                                if count >= 1000:
+                                    return {'size': 'large', 'count': count, 'type': type_indicator}
+                                elif count >= 50:
+                                    return {'size': 'medium', 'count': count, 'type': type_indicator}
+                                elif count >= 1:
+                                    return {'size': 'small', 'count': count, 'type': type_indicator}
+                        except (ValueError, TypeError):
+                            continue
             
-            for pattern in hours_patterns:
-                matches = re.findall(pattern, text_lower, re.IGNORECASE | re.MULTILINE)
-                hours_text.extend(matches)
+            # Look for general size indicators
+            if any(indicator in text for indicator in ['thousands of employees', 'million employees']):
+                return {'size': 'large', 'count': None, 'type': 'estimate'}
+            elif any(indicator in text for indicator in ['hundreds of employees', 'large team']):
+                return {'size': 'medium', 'count': None, 'type': 'estimate'}
+            elif any(indicator in text for indicator in ['small team', 'boutique', 'family business']):
+                return {'size': 'small', 'count': None, 'type': 'estimate'}
             
-            # Look for "24/7" or "24 hours"
-            if '24/7' in text_lower or '24 hours' in text_lower or 'open 24 hours' in text_lower:
-                hours_text.append('24/7')
+            return {'size': None, 'count': None, 'type': None}
             
-            return '; '.join(set(hours_text[:3]))  # Return up to 3 unique hour entries
+        except Exception:
+            return {'size': None, 'count': None, 'type': None}
+    
+    def analyze_locations(self, text):
+        """Analyze number of locations/offices"""
+        try:
+            score = 0
+            
+            # Look for multiple locations
+            location_patterns = [
+                r'(\d+)\s*offices?',
+                r'(\d+)\s*locations?',
+                r'(\d+)\s*branches?',
+                r'(\d+)\s*stores?',
+                r'(\d+)\s*facilities',
+                r'(\d+)\s*countries',
+                r'(\d+)\s*states'
+            ]
+            
+            for pattern in location_patterns:
+                matches = re.findall(pattern, text, re.IGNORECASE)
+                for match in matches:
+                    try:
+                        count = int(match)
+                        if count >= 100:
+                            score += 8
+                        elif count >= 50:
+                            score += 6
+                        elif count >= 10:
+                            score += 4
+                        elif count >= 5:
+                            score += 2
+                        elif count >= 2:
+                            score += 1
+                    except ValueError:
+                        continue
+            
+            # Look for global presence indicators
+            global_indicators = [
+                'worldwide', 'global presence', 'international offices',
+                'offices around the world', 'global locations'
+            ]
+            
+            for indicator in global_indicators:
+                if indicator in text:
+                    score += 3
+            
+            return score
+            
+        except Exception:
+            return 0
 
-        def analyze_detailed_website_metrics(self, soup):
-            """Analyze detailed website metrics to determine company size"""
-            metrics = {}
+    def classify_industry(self, page_text, title, description):
+        """Classify industry type"""
+        try:
+            all_text = (page_text + ' ' + (title or '') + ' ' + (description or '')).lower()
+            industry_scores = {}
             
-            # Count various elements
-            metrics['total_links'] = len(soup.find_all('a'))
-            metrics['internal_links'] = len([link for link in soup.find_all('a', href=True) 
-                                           if link.get('href', '').startswith('/') or not link.get('href', '').startswith('http')])
-            metrics['external_links'] = metrics['total_links'] - metrics['internal_links']
+            for industry, keywords in self.industry_keywords.items():
+                score = 0
+                for keyword in keywords:
+                    if keyword in all_text:
+                        frequency = all_text.count(keyword)
+                        if title and keyword in title.lower():
+                            score += frequency * 3
+                        elif description and keyword in description.lower():
+                            score += frequency * 2
+                        else:
+                            score += frequency
+                
+                if score > 0:
+                    industry_scores[industry] = score
             
-            metrics['images'] = len(soup.find_all('img'))
-            metrics['forms'] = len(soup.find_all('form'))
-            metrics['scripts'] = len(soup.find_all('script'))
-            metrics['stylesheets'] = len(soup.find_all('link', rel='stylesheet'))
+            if not industry_scores:
+                return {'industry': 'general_business', 'confidence': 0}
             
-            # Navigation complexity
-            nav_elements = soup.find_all(['nav', 'ul', 'ol'])
-            metrics['navigation_items'] = sum(len(nav.find_all('li')) for nav in nav_elements)
+            top_industry = max(industry_scores, key=industry_scores.get)
+            top_score = industry_scores[top_industry]
+            confidence = min(95, top_score * 10)
             
-            # Page structure complexity
-            metrics['divs'] = len(soup.find_all('div'))
-            metrics['sections'] = len(soup.find_all('section'))
-            metrics['articles'] = len(soup.find_all('article'))
+            return {'industry': top_industry, 'confidence': round(confidence)}
             
-            # Content metrics
-            text_content = soup.get_text()
-            metrics['word_count'] = len(text_content.split())
-            metrics['character_count'] = len(text_content)
+        except Exception as e:
+            logger.error(f"Error classifying industry: {e}")
+            return {'industry': 'unknown', 'confidence': 0}
+
+    def is_business_website(self, soup, page_text):
+        """Check if it's a business website"""
+        business_indicators = [
+            'about us', 'contact us', 'services', 'products', 'company',
+            'business', 'team', 'careers', 'support', 'customer',
+            'phone', 'email', 'address', 'location', 'hours'
+        ]
+        
+        nav_elements = soup.find_all(['nav', 'menu'])
+        has_navigation = len(nav_elements) > 0
+        
+        business_content_count = sum(1 for indicator in business_indicators if indicator in page_text)
+        
+        has_contact = bool(re.search(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', page_text) or 
+                          re.search(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', page_text))
+        
+        score = 0
+        if has_navigation: score += 2
+        if business_content_count >= 3: score += 2
+        if has_contact: score += 2
+        if len(page_text.split()) > 100: score += 1
+        
+        return score >= 4
+
+    def extract_business_info(self, soup):
+        """Extract comprehensive business information including contact details, social media, and location"""
+        info = {}
+        page_text = soup.get_text()
+        
+        # Company name - try multiple sources
+        company_name = None
+        h1_tags = soup.find_all('h1')
+        if h1_tags:
+            company_name = h1_tags[0].get_text().strip()
+        
+        # Try title tag if h1 is not descriptive
+        title_tag = soup.find('title')
+        if title_tag and (not company_name or len(company_name) < 3):
+            title_text = title_tag.get_text().strip()
+            # Clean up common title suffixes
+            for suffix in [' - Home', ' | Home', ' - Welcome', ' | Welcome']:
+                if suffix in title_text:
+                    title_text = title_text.replace(suffix, '')
+            company_name = title_text
+        
+        info['company_name'] = company_name or ''
+        
+        # Extract all emails
+        emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', page_text)
+        # Filter out common generic emails and keep unique ones
+        filtered_emails = []
+        generic_prefixes = ['info', 'contact', 'admin', 'support', 'hello', 'mail', 'office']
+        for email in set(emails):  # Remove duplicates
+            email_lower = email.lower()
+            # Skip obviously fake or generic emails
+            if not any(skip in email_lower for skip in ['noreply', 'donotreply', 'example', 'test', 'spam']):
+                filtered_emails.append(email)
+        
+        info['emails'] = filtered_emails[:5]  # Limit to 5 emails
+        info['primary_email'] = filtered_emails[0] if filtered_emails else ''
+        
+        # Extract all phone numbers with better patterns
+        phone_patterns = [
+            r'\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b',  # US format
+            r'\(\d{3}\)\s?\d{3}[-.\s]?\d{4}',      # (123) 456-7890
+            r'\b\d{3}\.\d{3}\.\d{4}\b',            # 123.456.7890
+            r'\+\d{1,3}[-.\s]?\d{3,4}[-.\s]?\d{3,4}[-.\s]?\d{3,4}',  # International
+        ]
+        
+        phones = []
+        for pattern in phone_patterns:
+            phones.extend(re.findall(pattern, page_text))
+        
+        # Clean and deduplicate phones
+        cleaned_phones = []
+        for phone in set(phones):
+            # Remove common non-phone numbers
+            if not any(skip in phone for skip in ['111-111-1111', '123-456-7890', '000-000-0000']):
+                cleaned_phones.append(phone.strip())
+        
+        info['phones'] = cleaned_phones[:3]  # Limit to 3 phones
+        info['primary_phone'] = cleaned_phones[0] if cleaned_phones else ''
+        
+        # Extract physical address
+        address = self.extract_address(soup, page_text)
+        info['address'] = address
+        
+        # Extract location and country information
+        location_info = self.extract_location_and_country(soup, page_text, address)
+        info.update(location_info)
+        
+        # Extract social media links
+        social_media = self.extract_social_media_links(soup)
+        info['social_media'] = social_media
+        
+        # Extract business hours
+        hours = self.extract_business_hours(page_text)
+        info['business_hours'] = hours
+        
+        # Check for online booking/reservation systems
+        booking_indicators = ['book now', 'reserve now', 'schedule appointment', 'book online', 'make reservation']
+        info['has_online_booking'] = any(indicator in page_text.lower() for indicator in booking_indicators)
+        
+        # Extract website complexity metrics
+        info['website_metrics'] = self.analyze_detailed_website_metrics(soup)
+        
+        return info
+
+    def extract_address(self, soup, page_text):
+        """Extract physical address from webpage"""
+        address_patterns = [
+            # Street address patterns
+            r'\d+\s+[A-Za-z0-9\s,.-]+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Way|Court|Ct|Place|Pl)\s*,?\s*[A-Za-z\s]+,?\s*[A-Z]{2}\s+\d{5}',
+            r'\d+\s+[A-Za-z0-9\s,.-]+,\s*[A-Za-z\s]+,\s*[A-Z]{2}\s+\d{5}',
+            # PO Box patterns
+            r'P\.?O\.?\s+Box\s+\d+,?\s*[A-Za-z\s]+,?\s*[A-Z]{2}\s+\d{5}',
+        ]
+        
+        for pattern in address_patterns:
+            matches = re.findall(pattern, page_text, re.IGNORECASE)
+            if matches:
+                # Return the first reasonable looking address
+                for match in matches:
+                    if len(match) > 20:  # Reasonable address length
+                        return match.strip()
+        
+        # Try to find address in structured data or contact sections
+        contact_sections = soup.find_all(['div', 'section'], class_=re.compile(r'contact|address|location', re.I))
+        for section in contact_sections:
+            section_text = section.get_text()
+            for pattern in address_patterns:
+                matches = re.findall(pattern, section_text, re.IGNORECASE)
+                if matches:
+                    return matches[0].strip()
+        
+        return ''
+
+    def extract_location_and_country(self, soup, page_text, address):
+        """Extract detailed location and country information"""
+        location_info = {
+            'country': '',
+            'country_confidence': 0,
+            'state_province': '',
+            'city': '',
+            'local_area': '',
+            'serves_locations': [],
+            'location_indicators': []
+        }
+        
+        try:
+            # Country detection patterns
+            country_patterns = {
+                'United States': {
+                    'patterns': [
+                        r'\b(?:USA|United States|US|America)\b',
+                        r'\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b',  # US ZIP codes
+                        r'\b(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)\s+\d{5}\b',
+                    ],
+                    'indicators': ['USD', 'dollars', 'ZIP', 'state', 'county'],
+                    'states': ['Alabama', 'Alaska', 'Arizona', 'Arkansas', 'California', 'Colorado', 'Connecticut', 'Delaware', 'Florida', 'Georgia', 'Hawaii', 'Idaho', 'Illinois', 'Indiana', 'Iowa', 'Kansas', 'Kentucky', 'Louisiana', 'Maine', 'Maryland', 'Massachusetts', 'Michigan', 'Minnesota', 'Mississippi', 'Missouri', 'Montana', 'Nebraska', 'Nevada', 'New Hampshire', 'New Jersey', 'New Mexico', 'New York', 'North Carolina', 'North Dakota', 'Ohio', 'Oklahoma', 'Oregon', 'Pennsylvania', 'Rhode Island', 'South Carolina', 'South Dakota', 'Tennessee', 'Texas', 'Utah', 'Vermont', 'Virginia', 'Washington', 'West Virginia', 'Wisconsin', 'Wyoming']
+                },
+                'Canada': {
+                    'patterns': [
+                        r'\bCanada\b',
+                        r'\b[A-Z]\d[A-Z]\s*\d[A-Z]\d\b',  # Canadian postal codes
+                        r'\b(?:AB|BC|MB|NB|NL|NS|NT|NU|ON|PE|QC|SK|YT)\b',
+                    ],
+                    'indicators': ['CAD', 'Canadian', 'province', 'postal code'],
+                    'provinces': ['Alberta', 'British Columbia', 'Manitoba', 'New Brunswick', 'Newfoundland and Labrador', 'Northwest Territories', 'Nova Scotia', 'Nunavut', 'Ontario', 'Prince Edward Island', 'Quebec', 'Saskatchewan', 'Yukon']
+                },
+                'United Kingdom': {
+                    'patterns': [
+                        r'\b(?:UK|United Kingdom|Britain|England|Scotland|Wales|Northern Ireland)\b',
+                        r'\b[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}\b',  # UK postcodes
+                    ],
+                    'indicators': ['£', 'GBP', 'pounds', 'postcode', 'shire', 'county'],
+                    'regions': ['England', 'Scotland', 'Wales', 'Northern Ireland']
+                },
+                'Australia': {
+                    'patterns': [
+                        r'\bAustralia\b',
+                        r'\b\d{4}\s*(?:NSW|VIC|QLD|WA|SA|TAS|ACT|NT)\b',
+                    ],
+                    'indicators': ['AUD', 'Australian', 'postcode'],
+                    'states': ['New South Wales', 'Victoria', 'Queensland', 'Western Australia', 'South Australia', 'Tasmania', 'Australian Capital Territory', 'Northern Territory']
+                },
+                'Germany': {
+                    'patterns': [
+                        r'\bDeutschland\b|\bGermany\b',
+                        r'\b\d{5}\s*(?:Germany|Deutschland)\b',
+                    ],
+                    'indicators': ['EUR', '€', 'euros', 'German'],
+                    'regions': ['Bavaria', 'Baden-Württemberg', 'North Rhine-Westphalia', 'Berlin', 'Hamburg']
+                },
+                'France': {
+                    'patterns': [
+                        r'\bFrance\b|\bFrançais\b',
+                        r'\b\d{5}\s*France\b',
+                    ],
+                    'indicators': ['EUR', '€', 'euros', 'French'],
+                    'regions': ['Paris', 'Lyon', 'Marseille', 'Toulouse', 'Nice']
+                },
+                'Spain': {
+                    'patterns': [
+                        r'\bSpain\b|\bEspaña\b',
+                        r'\b\d{5}\s*Spain\b',
+                    ],
+                    'indicators': ['EUR', '€', 'euros', 'Spanish'],
+                    'regions': ['Madrid', 'Barcelona', 'Valencia', 'Seville', 'Bilbao']
+                },
+                'Italy': {
+                    'patterns': [
+                        r'\bItaly\b|\bItalia\b',
+                        r'\b\d{5}\s*Italy\b',
+                    ],
+                    'indicators': ['EUR', '€', 'euros', 'Italian'],
+                    'regions': ['Rome', 'Milan', 'Naples', 'Turin', 'Florence']
+                },
+                'Netherlands': {
+                    'patterns': [
+                        r'\bNetherlands\b|\bHolland\b',
+                        r'\b\d{4}\s*[A-Z]{2}\s*Netherlands\b',
+                    ],
+                    'indicators': ['EUR', '€', 'euros', 'Dutch'],
+                    'regions': ['Amsterdam', 'Rotterdam', 'The Hague', 'Utrecht']
+                },
+                'Mexico': {
+                    'patterns': [
+                        r'\bMexico\b|\bMéxico\b',
+                        r'\b\d{5}\s*Mexico\b',
+                    ],
+                    'indicators': ['MXN', 'pesos', 'Mexican'],
+                    'regions': ['Mexico City', 'Guadalajara', 'Monterrey', 'Cancun', 'Puerto Vallarta']
+                }
+            }
             
-            # Advanced features
-            metrics['videos'] = len(soup.find_all(['video', 'iframe']))
-            metrics['interactive_elements'] = len(soup.find_all(['button', 'input', 'select', 'textarea']))
+            text_lower = page_text.lower()
+            country_scores = {}
             
-            # Calculate complexity score
-            complexity_score = 0
+            # Score countries based on patterns and indicators
+            for country, data in country_patterns.items():
+                score = 0
+                
+                # Check patterns
+                for pattern in data['patterns']:
+                    matches = len(re.findall(pattern, page_text, re.IGNORECASE))
+                    if matches > 0:
+                        score += matches * 10
+                
+                # Check indicators
+                for indicator in data['indicators']:
+                    if indicator.lower() in text_lower:
+                        score += 5
+                
+                # Check states/provinces/regions
+                for region in data.get('states', data.get('provinces', data.get('regions', []))):
+                    if region.lower() in text_lower:
+                        score += 8
+                        location_info['state_province'] = region
+                
+                if score > 0:
+                    country_scores[country] = score
             
-            # Website size scoring (larger = more complex = bigger business)
-            if metrics['word_count'] > 5000:
-                complexity_score += 15  # Very large site
-            elif metrics['word_count'] > 2000:
-                complexity_score += 10  # Large site
-            elif metrics['word_count'] > 500:
-                complexity_score += 5   # Medium site
+            # Additional country detection from address
+            if address:
+                address_lower = address.lower()
+                for country, data in country_patterns.items():
+                    for pattern in data['patterns']:
+                        if re.search(pattern, address, re.IGNORECASE):
+                            country_scores[country] = country_scores.get(country, 0) + 15
             
-            if metrics['total_links'] > 100:
-                complexity_score += 10
-            elif metrics['total_links'] > 50:
-                complexity_score += 5
+            # Domain-based country detection
+            domain_tlds = {
+                '.uk': 'United Kingdom',
+                '.co.uk': 'United Kingdom',
+                '.ca': 'Canada',
+                '.au': 'Australia',
+                '.com.au': 'Australia',
+                '.de': 'Germany',
+                '.fr': 'France',
+                '.es': 'Spain',
+                '.it': 'Italy',
+                '.nl': 'Netherlands',
+                '.mx': 'Mexico',
+                '.com.mx': 'Mexico'
+            }
             
-            if metrics['navigation_items'] > 50:
-                complexity_score += 8
-            elif metrics['navigation_items'] > 20:
-                complexity_score += 4
+            # Check current page URL for TLD
+            current_url = soup.find('link', {'rel': 'canonical'})
+            if current_url:
+                url = current_url.get('href', '')
+                for tld, country in domain_tlds.items():
+                    if tld in url:
+                        country_scores[country] = country_scores.get(country, 0) + 12
             
-            if metrics['forms'] > 5:
-                complexity_score += 6
+            # Determine best country match
+            if country_scores:
+                best_country = max(country_scores, key=country_scores.get)
+                best_score = country_scores[best_country]
+                total_score = sum(country_scores.values())
+                confidence = min(95, (best_score / total_score) * 100) if total_score > 0 else 0
+                
+                location_info['country'] = best_country
+                location_info['country_confidence'] = round(confidence)
             
-            if metrics['scripts'] > 20:
-                complexity_score += 8
+            # Extract cities and local areas
+            location_info['city'] = self.extract_city_names(page_text, location_info['country'])
+            location_info['local_area'] = self.extract_local_areas(page_text)
+            location_info['serves_locations'] = self.extract_service_areas(page_text)
             
-            if metrics['images'] > 50:
-                complexity_score += 6
+            # Compile location indicators found
+            location_indicators = []
+            for country, data in country_patterns.items():
+                if country in country_scores:
+                    for indicator in data['indicators']:
+                        if indicator.lower() in text_lower:
+                            location_indicators.append(indicator)
             
-            metrics['complexity_score'] = complexity_score
-            return metrics
+            location_info['location_indicators'] = list(set(location_indicators))
+            
+        except Exception as e:
+            logger.error(f"Error extracting location information: {e}")
+        
+        return location_info
+
+    def extract_city_names(self, page_text, country):
+        """Extract city names based on country context"""
+        cities = []
+        
+        # Common city patterns by country
+        city_databases = {
+            'United States': [
+                'New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix', 'Philadelphia',
+                'San Antonio', 'San Diego', 'Dallas', 'San Jose', 'Austin', 'Jacksonville',
+                'Fort Worth', 'Columbus', 'Charlotte', 'San Francisco', 'Indianapolis',
+                'Seattle', 'Denver', 'Washington', 'Boston', 'El Paso', 'Nashville',
+                'Detroit', 'Oklahoma City', 'Portland', 'Las Vegas', 'Memphis', 'Louisville',
+                'Baltimore', 'Milwaukee', 'Albuquerque', 'Tucson', 'Fresno', 'Sacramento',
+                'Mesa', 'Kansas City', 'Atlanta', 'Long Beach', 'Colorado Springs', 'Raleigh',
+                'Miami', 'Virginia Beach', 'Omaha', 'Oakland', 'Minneapolis', 'Tulsa',
+                'Arlington', 'Tampa', 'New Orleans', 'Wichita', 'Cleveland', 'Bakersfield'
+            ],
+            'Canada': [
+                'Toronto', 'Montreal', 'Vancouver', 'Calgary', 'Edmonton', 'Ottawa',
+                'Winnipeg', 'Quebec City', 'Hamilton', 'Kitchener', 'London', 'Victoria',
+                'Halifax', 'Oshawa', 'Windsor', 'Saskatoon', 'St. Catharines', 'Regina',
+                'Kelowna', 'Barrie', 'Sherbrooke', 'Guelph', 'Kanata', 'Abbotsford'
+            ],
+            'United Kingdom': [
+                'London', 'Birmingham', 'Manchester', 'Glasgow', 'Liverpool', 'Edinburgh',
+                'Leeds', 'Sheffield', 'Bristol', 'Cardiff', 'Leicester', 'Belfast',
+                'Nottingham', 'Newcastle', 'Brighton', 'Hull', 'Plymouth', 'Stoke',
+                'Wolverhampton', 'Derby', 'Swansea', 'Southampton', 'Salford', 'Aberdeen'
+            ],
+            'Australia': [
+                'Sydney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaide', 'Gold Coast',
+                'Newcastle', 'Canberra', 'Sunshine Coast', 'Wollongong', 'Geelong',
+                'Hobart', 'Townsville', 'Cairns', 'Darwin', 'Toowoomba', 'Ballarat'
+            ]
+        }
+        
+        if country in city_databases:
+            text_lower = page_text.lower()
+            for city in city_databases[country]:
+                if city.lower() in text_lower:
+                    cities.append(city)
+        
+        # Generic city pattern detection
+        city_patterns = [
+            r'\bin\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
+            r'\blocated\s+in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
+            r'\bserving\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
+            r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?),\s*[A-Z]{2}\b'
+        ]
+        
+        for pattern in city_patterns:
+            matches = re.findall(pattern, page_text)
+            for match in matches:
+                if isinstance(match, tuple):
+                    match = match[0]
+                if len(match) > 2 and match not in cities:
+                    cities.append(match)
+        
+        return ', '.join(cities[:3])  # Return top 3 cities
+
+    def extract_local_areas(self, page_text):
+        """Extract local area indicators"""
+        local_patterns = [
+            r'\bdowntown\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
+            r'\bnear\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
+            r'\bclose\s+to\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
+            r'\bminutes\s+from\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b',
+            r'\bin\s+the\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+area\b',
+            r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+neighborhood\b'
+        ]
+        
+        local_areas = []
+        for pattern in local_patterns:
+            matches = re.findall(pattern, page_text, re.IGNORECASE)
+            for match in matches:
+                if isinstance(match, tuple):
+                    match = match[0]
+                if len(match) > 2 and match not in local_areas:
+                    local_areas.append(match)
+        
+        return ', '.join(local_areas[:3])
+
+    def extract_service_areas(self, page_text):
+        """Extract areas served by the business"""
+        service_patterns = [
+            r'\bserving\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)*)\b',
+            r'\bwe\s+serve\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)*)\b',
+            r'\bavailable\s+in\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)*)\b',
+            r'\bdelivering\s+to\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:,\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)*)\b'
+        ]
+        
+        service_areas = []
+        for pattern in service_patterns:
+            matches = re.findall(pattern, page_text, re.IGNORECASE)
+            for match in matches:
+                areas = [area.strip() for area in match.split(',')]
+                service_areas.extend(areas)
+        
+        return list(set(service_areas[:5]))  # Return unique areas, max 5
+
+    def extract_social_media_links(self, soup):
+        """Extract social media links from webpage"""
+        social_platforms = {
+            'facebook': ['facebook.com', 'fb.com'],
+            'twitter': ['twitter.com', 'x.com'],
+            'instagram': ['instagram.com'],
+            'linkedin': ['linkedin.com'],
+            'youtube': ['youtube.com', 'youtu.be'],
+            'tiktok': ['tiktok.com'],
+            'pinterest': ['pinterest.com'],
+            'snapchat': ['snapchat.com'],
+            'whatsapp': ['whatsapp.com', 'wa.me'],
+            'telegram': ['telegram.me', 't.me']
+        }
+        
+        social_links = {}
+        links = soup.find_all('a', href=True)
+        
+        for link in links:
+            href = link.get('href', '').lower()
+            for platform, domains in social_platforms.items():
+                if any(domain in href for domain in domains):
+                    # Clean up the URL
+                    if href.startswith('//'):
+                        href = 'https:' + href
+                    elif href.startswith('/'):
+                        continue  # Skip relative links
+                    
+                    social_links[platform] = href
+                    break
+        
+        return social_links
+
+    def extract_business_hours(self, page_text):
+        """Extract business hours from webpage text"""
+        # Common business hours patterns
+        hours_patterns = [
+            r'(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*[:\s-]*\s*\d{1,2}[:\s]*\d{0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?[\s-]*\d{1,2}[:\s]*\d{0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?',
+            r'hours?\s*:?\s*\d{1,2}[:\s]*\d{0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?[\s-]*\d{1,2}[:\s]*\d{0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?',
+            r'open\s*:?\s*\d{1,2}[:\s]*\d{0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?[\s-]*\d{1,2}[:\s]*\d{0,2}\s*(?:am|pm|a\.m\.|p\.m\.)?'
+        ]
+        
+        hours_text = []
+        text_lower = page_text.lower()
+        
+        for pattern in hours_patterns:
+            matches = re.findall(pattern, text_lower, re.IGNORECASE | re.MULTILINE)
+            hours_text.extend(matches)
+        
+        # Look for "24/7" or "24 hours"
+        if '24/7' in text_lower or '24 hours' in text_lower or 'open 24 hours' in text_lower:
+            hours_text.append('24/7')
+        
+        return '; '.join(set(hours_text[:3]))  # Return up to 3 unique hour entries
+
+    def analyze_detailed_website_metrics(self, soup):
+        """Analyze detailed website metrics to determine company size"""
+        metrics = {}
+        
+        # Count various elements
+        metrics['total_links'] = len(soup.find_all('a'))
+        metrics['internal_links'] = len([link for link in soup.find_all('a', href=True) 
+                                       if link.get('href', '').startswith('/') or not link.get('href', '').startswith('http')])
+        metrics['external_links'] = metrics['total_links'] - metrics['internal_links']
+        
+        metrics['images'] = len(soup.find_all('img'))
+        metrics['forms'] = len(soup.find_all('form'))
+        metrics['scripts'] = len(soup.find_all('script'))
+        metrics['stylesheets'] = len(soup.find_all('link', rel='stylesheet'))
+        
+        # Navigation complexity
+        nav_elements = soup.find_all(['nav', 'ul', 'ol'])
+        metrics['navigation_items'] = sum(len(nav.find_all('li')) for nav in nav_elements)
+        
+        # Page structure complexity
+        metrics['divs'] = len(soup.find_all('div'))
+        metrics['sections'] = len(soup.find_all('section'))
+        metrics['articles'] = len(soup.find_all('article'))
+        
+        # Content metrics
+        text_content = soup.get_text()
+        metrics['word_count'] = len(text_content.split())
+        metrics['character_count'] = len(text_content)
+        
+        # Advanced features
+        metrics['videos'] = len(soup.find_all(['video', 'iframe']))
+        metrics['interactive_elements'] = len(soup.find_all(['button', 'input', 'select', 'textarea']))
+        
+        # Calculate complexity score
+        complexity_score = 0
+        
+        # Website size scoring (larger = more complex = bigger business)
+        if metrics['word_count'] > 5000:
+            complexity_score += 15  # Very large site
+        elif metrics['word_count'] > 2000:
+            complexity_score += 10  # Large site
+        elif metrics['word_count'] > 500:
+            complexity_score += 5   # Medium site
+        
+        if metrics['total_links'] > 100:
+            complexity_score += 10
+        elif metrics['total_links'] > 50:
+            complexity_score += 5
+        
+        if metrics['navigation_items'] > 50:
+            complexity_score += 8
+        elif metrics['navigation_items'] > 20:
+            complexity_score += 4
+        
+        if metrics['forms'] > 5:
+            complexity_score += 6
+        
+        if metrics['scripts'] > 20:
+            complexity_score += 8
+        
+        if metrics['images'] > 50:
+            complexity_score += 6
+        
+        metrics['complexity_score'] = complexity_score
+        return metrics
 
     def setup_realtime_csv(self, output_dir):
         """Setup real-time CSV files - ENHANCED VERSION"""
@@ -2967,322 +2967,322 @@ class DomainChecker:
         print(f"📊 Real-time CSV file created: {main_file}")
         print(f"🎯 High-priority targets file created: {high_priority_file}")
 
-        def write_result_realtime(self, result):
-            """Write result to CSV immediately - ENHANCED VERSION"""
-            try:
-                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    def write_result_realtime(self, result):
+        """Write result to CSV immediately - ENHANCED VERSION"""
+        try:
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Update stats
+            self.stats['total_processed'] += 1
+            if result.get('working', False):
+                self.stats['working'] += 1
+            if result.get('is_business', False):
+                self.stats['business'] += 1
+            if result.get('is_parked', False):
+                self.stats['parked'] += 1
+            if result.get('error') and not result.get('failed_due_to_connectivity', False):
+                self.stats['failed'] += 1
+            
+            industry = result.get('industry_type')
+            if industry:
+                self.stats['industries'][industry] = self.stats['industries'].get(industry, 0) + 1
+            
+            company_size = result.get('company_size')
+            if company_size:
+                self.stats['company_sizes'][company_size] = self.stats['company_sizes'].get(company_size, 0) + 1
+            
+            # ENHANCED: Track new VR-specific stats
+            if result.get('industry_type') == 'vacation_rental':
+                # Track business models
+                vr_model = result.get('vr_business_model')
+                if vr_model:
+                    self.stats['vr_business_models'][vr_model] = self.stats['vr_business_models'].get(vr_model, 0) + 1
                 
-                # Update stats
-                self.stats['total_processed'] += 1
-                if result.get('working', False):
-                    self.stats['working'] += 1
-                if result.get('is_business', False):
-                    self.stats['business'] += 1
-                if result.get('is_parked', False):
-                    self.stats['parked'] += 1
-                if result.get('error') and not result.get('failed_due_to_connectivity', False):
-                    self.stats['failed'] += 1
+                # Track priorities
+                priority = result.get('vr_priority')
+                if priority == 'high':
+                    self.stats['high_priority_targets'] += 1
+                elif priority == 'medium':
+                    self.stats['medium_priority_targets'] += 1
                 
-                industry = result.get('industry_type')
-                if industry:
-                    self.stats['industries'][industry] = self.stats['industries'].get(industry, 0) + 1
+                # Track decision maker accessibility
+                if result.get('vr_decision_maker_accessible') == 'high':
+                    self.stats['decision_maker_accessible'] += 1
                 
-                company_size = result.get('company_size')
-                if company_size:
-                    self.stats['company_sizes'][company_size] = self.stats['company_sizes'].get(company_size, 0) + 1
+                # Track website upgrade needs
+                if result.get('vr_needs_website_upgrade'):
+                    self.stats['website_needs_upgrade'] += 1
                 
-                # ENHANCED: Track new VR-specific stats
-                if result.get('industry_type') == 'vacation_rental':
-                    # Track business models
-                    vr_model = result.get('vr_business_model')
-                    if vr_model:
-                        self.stats['vr_business_models'][vr_model] = self.stats['vr_business_models'].get(vr_model, 0) + 1
-                    
-                    # Track priorities
-                    priority = result.get('vr_priority')
-                    if priority == 'high':
-                        self.stats['high_priority_targets'] += 1
-                    elif priority == 'medium':
-                        self.stats['medium_priority_targets'] += 1
-                    
-                    # Track decision maker accessibility
-                    if result.get('vr_decision_maker_accessible') == 'high':
-                        self.stats['decision_maker_accessible'] += 1
-                    
-                    # Track website upgrade needs
-                    if result.get('vr_needs_website_upgrade'):
-                        self.stats['website_needs_upgrade'] += 1
-                    
-                    # Track property types
-                    prop_type = result.get('vr_property_type')
-                    if prop_type:
-                        self.stats['vr_property_types'][prop_type] = self.stats['vr_property_types'].get(prop_type, 0) + 1
-                    
-                    # Original target customer tracking
-                    if result.get('is_target_customer') == True:
-                        self.stats['target_customers'] += 1
-                    elif result.get('is_target_customer') == False:
-                        exclusion_reason = result.get('vr_exclusion_reason', 'unknown')
-                        if exclusion_reason:
-                            self.stats['excluded_businesses'][exclusion_reason] = self.stats['excluded_businesses'].get(exclusion_reason, 0) + 1
+                # Track property types
+                prop_type = result.get('vr_property_type')
+                if prop_type:
+                    self.stats['vr_property_types'][prop_type] = self.stats['vr_property_types'].get(prop_type, 0) + 1
                 
-                # Write to CSV - ensure no None values and include new fields
-                business_info = result.get('business_info', {})
-                social_media = business_info.get('social_media', {})
-                website_metrics = business_info.get('website_metrics', {})
-                serves_locations = business_info.get('serves_locations', [])
-                
-                row = {
-                    'domain': result.get('domain', ''),
-                    'working': result.get('working', False),
-                    'final_url': result.get('final_url', '') or '',
-                    'protocol': result.get('protocol', '') or '',
-                    'status_code': result.get('status_code', '') or '',
-                    'title': result.get('title', '') or '',
-                    'description': result.get('description', '') or '',
-                    'is_parked': result.get('is_parked', False),
-                    'is_business': result.get('is_business', False),
-                    'industry_type': result.get('industry_type', '') or '',
-                    'industry_confidence': result.get('industry_confidence', 0) or 0,
-                    'company_size': result.get('company_size', '') or '',
-                    'size_confidence': result.get('size_confidence', 0) or 0,
-                    'vr_business_model': result.get('vr_business_model', '') or '',
-                    'vr_exclusion_reason': result.get('vr_exclusion_reason', '') or '',
-                    'is_target_customer': str(result.get('is_target_customer', '') or ''),
-                    'vr_model_confidence': result.get('vr_model_confidence', 0) or 0,
-                    # NEW FIELDS
-                    'vr_priority': result.get('vr_priority', '') or '',
-                    'vr_target_score': result.get('vr_target_score', 0) or 0,
-                    'vr_target_factors': '; '.join(result.get('vr_target_factors', [])),
-                    'vr_property_count': str(result.get('vr_property_count', '') or ''),
-                    'vr_property_count_confidence': result.get('vr_property_count_confidence', 0) or 0,
-                    'vr_decision_maker_accessible': result.get('vr_decision_maker_accessible', '') or '',
-                    'vr_decision_maker_score': result.get('vr_decision_maker_score', 0) or 0,
-                    'vr_needs_website_upgrade': str(result.get('vr_needs_website_upgrade', False)),
-                    'vr_upgrade_indicators': '; '.join(result.get('vr_upgrade_indicators', [])),
-                    'vr_property_type': result.get('vr_property_type', '') or '',
-                    'vr_geographic_scope': result.get('vr_geographic_scope', '') or '',
-                    # Original fields continue
-                    'company_name': business_info.get('company_name', '') or '',
-                    'primary_email': business_info.get('primary_email', '') or '',
-                    'primary_phone': business_info.get('primary_phone', '') or '',
-                    'address': business_info.get('address', '') or '',
-                    'country': business_info.get('country', '') or '',
-                    'country_confidence': business_info.get('country_confidence', 0) or 0,
-                    'state_province': business_info.get('state_province', '') or '',
-                    'city': business_info.get('city', '') or '',
-                    'local_area': business_info.get('local_area', '') or '',
-                    'serves_locations': '; '.join(serves_locations) if serves_locations else '',
-                    'social_media_links': '; '.join([f"{platform}: {url}" for platform, url in social_media.items()]) if social_media else '',
-                    'website_complexity_score': website_metrics.get('complexity_score', 0) or 0,
-                    'word_count': website_metrics.get('word_count', 0) or 0,
-                    'total_links': website_metrics.get('total_links', 0) or 0,
-                    'has_online_booking': business_info.get('has_online_booking', False),
-                    'error': result.get('error', '') or '',
-                    'failed_due_to_connectivity': result.get('failed_due_to_connectivity', False),
-                    'processed_at': current_time
-                }
-                
-                self.csv_writers['main'].writerow(row)
-                self.csv_files['main'].flush()
-                
-                # ENHANCED: Write high-priority targets to separate file
-                if result.get('vr_priority') == 'high' and result.get('industry_type') == 'vacation_rental':
-                    self.csv_writers['high_priority'].writerow(row)
-                    self.csv_files['high_priority'].flush()
-                
-                # Add to processed domains
-                self.processed_domains.add(result.get('domain', ''))
-                
-            except Exception as e:
-                logger.error(f"Error writing result: {e}")
+                # Original target customer tracking
+                if result.get('is_target_customer') == True:
+                    self.stats['target_customers'] += 1
+                elif result.get('is_target_customer') == False:
+                    exclusion_reason = result.get('vr_exclusion_reason', 'unknown')
+                    if exclusion_reason:
+                        self.stats['excluded_businesses'][exclusion_reason] = self.stats['excluded_businesses'].get(exclusion_reason, 0) + 1
+            
+            # Write to CSV - ensure no None values and include new fields
+            business_info = result.get('business_info', {})
+            social_media = business_info.get('social_media', {})
+            website_metrics = business_info.get('website_metrics', {})
+            serves_locations = business_info.get('serves_locations', [])
+            
+            row = {
+                'domain': result.get('domain', ''),
+                'working': result.get('working', False),
+                'final_url': result.get('final_url', '') or '',
+                'protocol': result.get('protocol', '') or '',
+                'status_code': result.get('status_code', '') or '',
+                'title': result.get('title', '') or '',
+                'description': result.get('description', '') or '',
+                'is_parked': result.get('is_parked', False),
+                'is_business': result.get('is_business', False),
+                'industry_type': result.get('industry_type', '') or '',
+                'industry_confidence': result.get('industry_confidence', 0) or 0,
+                'company_size': result.get('company_size', '') or '',
+                'size_confidence': result.get('size_confidence', 0) or 0,
+                'vr_business_model': result.get('vr_business_model', '') or '',
+                'vr_exclusion_reason': result.get('vr_exclusion_reason', '') or '',
+                'is_target_customer': str(result.get('is_target_customer', '') or ''),
+                'vr_model_confidence': result.get('vr_model_confidence', 0) or 0,
+                # NEW FIELDS
+                'vr_priority': result.get('vr_priority', '') or '',
+                'vr_target_score': result.get('vr_target_score', 0) or 0,
+                'vr_target_factors': '; '.join(result.get('vr_target_factors', [])),
+                'vr_property_count': str(result.get('vr_property_count', '') or ''),
+                'vr_property_count_confidence': result.get('vr_property_count_confidence', 0) or 0,
+                'vr_decision_maker_accessible': result.get('vr_decision_maker_accessible', '') or '',
+                'vr_decision_maker_score': result.get('vr_decision_maker_score', 0) or 0,
+                'vr_needs_website_upgrade': str(result.get('vr_needs_website_upgrade', False)),
+                'vr_upgrade_indicators': '; '.join(result.get('vr_upgrade_indicators', [])),
+                'vr_property_type': result.get('vr_property_type', '') or '',
+                'vr_geographic_scope': result.get('vr_geographic_scope', '') or '',
+                # Original fields continue
+                'company_name': business_info.get('company_name', '') or '',
+                'primary_email': business_info.get('primary_email', '') or '',
+                'primary_phone': business_info.get('primary_phone', '') or '',
+                'address': business_info.get('address', '') or '',
+                'country': business_info.get('country', '') or '',
+                'country_confidence': business_info.get('country_confidence', 0) or 0,
+                'state_province': business_info.get('state_province', '') or '',
+                'city': business_info.get('city', '') or '',
+                'local_area': business_info.get('local_area', '') or '',
+                'serves_locations': '; '.join(serves_locations) if serves_locations else '',
+                'social_media_links': '; '.join([f"{platform}: {url}" for platform, url in social_media.items()]) if social_media else '',
+                'website_complexity_score': website_metrics.get('complexity_score', 0) or 0,
+                'word_count': website_metrics.get('word_count', 0) or 0,
+                'total_links': website_metrics.get('total_links', 0) or 0,
+                'has_online_booking': business_info.get('has_online_booking', False),
+                'error': result.get('error', '') or '',
+                'failed_due_to_connectivity': result.get('failed_due_to_connectivity', False),
+                'processed_at': current_time
+            }
+            
+            self.csv_writers['main'].writerow(row)
+            self.csv_files['main'].flush()
+            
+            # ENHANCED: Write high-priority targets to separate file
+            if result.get('vr_priority') == 'high' and result.get('industry_type') == 'vacation_rental':
+                self.csv_writers['high_priority'].writerow(row)
+                self.csv_files['high_priority'].flush()
+            
+            # Add to processed domains
+            self.processed_domains.add(result.get('domain', ''))
+            
+        except Exception as e:
+            logger.error(f"Error writing result: {e}")
 
     def display_live_stats(self):
-            """Display live statistics - ENHANCED VERSION"""
-            if self.stats['start_time']:
-                elapsed = time.time() - self.stats['start_time']
-                rate = self.stats['total_processed'] / elapsed if elapsed > 0 else 0
+        """Display live statistics - ENHANCED VERSION"""
+        if self.stats['start_time']:
+            elapsed = time.time() - self.stats['start_time']
+            rate = self.stats['total_processed'] / elapsed if elapsed > 0 else 0
+            
+            print('\033[2J\033[H', end='')
+            print("🔄 LIVE DOMAIN PROCESSING STATISTICS")
+            print("=" * 60)
+            print(f"📦 Batch: {self.current_batch}/{self.total_batches}")
+            print(f"⏱️  Time elapsed: {int(elapsed//60)}m {int(elapsed%60)}s")
+            print(f"🚀 Processing rate: {rate:.1f} domains/second")
+            print(f"📊 Total processed: {self.stats['total_processed']}")
+            print(f"✅ Working: {self.stats['working']} ({self.stats['working']/max(1,self.stats['total_processed'])*100:.1f}%)")
+            print(f"🏢 Business: {self.stats['business']} ({self.stats['business']/max(1,self.stats['total_processed'])*100:.1f}%)")
+            print(f"🅿️  Parked: {self.stats['parked']} ({self.stats['parked']/max(1,self.stats['total_processed'])*100:.1f}%)")
+            print(f"❌ Failed: {self.stats['failed']} ({self.stats['failed']/max(1,self.stats['total_processed'])*100:.1f}%)")
+            
+            if self.consecutive_failures > 0:
+                print(f"🔗 Consecutive failures: {self.consecutive_failures}")
+            
+            if self.stats['industries']:
+                print(f"\n🏷️ TOP INDUSTRIES:")
+                sorted_industries = sorted(self.stats['industries'].items(), key=lambda x: x[1], reverse=True)[:5]
+                for industry, count in sorted_industries:
+                    print(f"   {industry}: {count}")
+            
+            if self.stats['company_sizes']:
+                print(f"\n🏢 COMPANY SIZES:")
+                sorted_sizes = sorted(self.stats['company_sizes'].items(), key=lambda x: x[1], reverse=True)
+                for size, count in sorted_sizes:
+                    size_display = {
+                        'large_enterprise': '🏢 Large Enterprise',
+                        'medium_business': '🏬 Medium Business', 
+                        'small_business': '🏪 Small Business',
+                        'unknown': '❓ Unknown'
+                    }.get(size, size)
+                    print(f"   {size_display}: {count}")
+            
+            # ENHANCED: Show vacation rental specific stats
+            vr_industry_count = self.stats['industries'].get('vacation_rental', 0)
+            if vr_industry_count > 0:
+                print(f"\n🏖️ VACATION RENTAL ANALYSIS ({vr_industry_count} total):")
                 
-                print('\033[2J\033[H', end='')
-                print("🔄 LIVE DOMAIN PROCESSING STATISTICS")
-                print("=" * 60)
-                print(f"📦 Batch: {self.current_batch}/{self.total_batches}")
-                print(f"⏱️  Time elapsed: {int(elapsed//60)}m {int(elapsed%60)}s")
-                print(f"🚀 Processing rate: {rate:.1f} domains/second")
-                print(f"📊 Total processed: {self.stats['total_processed']}")
-                print(f"✅ Working: {self.stats['working']} ({self.stats['working']/max(1,self.stats['total_processed'])*100:.1f}%)")
-                print(f"🏢 Business: {self.stats['business']} ({self.stats['business']/max(1,self.stats['total_processed'])*100:.1f}%)")
-                print(f"🅿️  Parked: {self.stats['parked']} ({self.stats['parked']/max(1,self.stats['total_processed'])*100:.1f}%)")
-                print(f"❌ Failed: {self.stats['failed']} ({self.stats['failed']/max(1,self.stats['total_processed'])*100:.1f}%)")
+                # Priority breakdown
+                print(f"   🎯 High Priority Targets: {self.stats.get('high_priority_targets', 0)}")
+                print(f"   ⭐ Medium Priority Targets: {self.stats.get('medium_priority_targets', 0)}")
                 
-                if self.consecutive_failures > 0:
-                    print(f"🔗 Consecutive failures: {self.consecutive_failures}")
+                # Key metrics
+                print(f"   📞 High Decision Maker Access: {self.stats.get('decision_maker_accessible', 0)}")
+                print(f"   🔧 Need Website Upgrade: {self.stats.get('website_needs_upgrade', 0)}")
                 
-                if self.stats['industries']:
-                    print(f"\n🏷️ TOP INDUSTRIES:")
-                    sorted_industries = sorted(self.stats['industries'].items(), key=lambda x: x[1], reverse=True)[:5]
-                    for industry, count in sorted_industries:
-                        print(f"   {industry}: {count}")
+                # Business models
+                if self.stats.get('vr_business_models'):
+                    print(f"\n   📊 Business Models:")
+                    for model, count in sorted(self.stats['vr_business_models'].items(), key=lambda x: x[1], reverse=True):
+                        model_display = {
+                            'direct_owner_small': '🏠 Small Direct Owner (1-5)',
+                            'direct_owner_medium': '🏘️ Medium Direct Owner (6-15)',
+                            'property_manager_small': '🏢 Small PM (10-50)',
+                            'property_manager_medium': '🏬 Medium PM (51-200)',
+                            'property_manager_large': '🏭 Large PM (200+)',
+                            'listing_platform_small': '📋 Small Directory',
+                            'listing_platform_large': '🌐 Large Platform',
+                            'software_provider': '💻 Software Provider',
+                            'marketing_agency': '📢 Marketing Agency'
+                        }.get(model, model)
+                        print(f"      {model_display}: {count}")
                 
-                if self.stats['company_sizes']:
-                    print(f"\n🏢 COMPANY SIZES:")
-                    sorted_sizes = sorted(self.stats['company_sizes'].items(), key=lambda x: x[1], reverse=True)
-                    for size, count in sorted_sizes:
-                        size_display = {
-                            'large_enterprise': '🏢 Large Enterprise',
-                            'medium_business': '🏬 Medium Business', 
-                            'small_business': '🏪 Small Business',
-                            'unknown': '❓ Unknown'
-                        }.get(size, size)
-                        print(f"   {size_display}: {count}")
-                
-                # ENHANCED: Show vacation rental specific stats
-                vr_industry_count = self.stats['industries'].get('vacation_rental', 0)
-                if vr_industry_count > 0:
-                    print(f"\n🏖️ VACATION RENTAL ANALYSIS ({vr_industry_count} total):")
-                    
-                    # Priority breakdown
-                    print(f"   🎯 High Priority Targets: {self.stats.get('high_priority_targets', 0)}")
-                    print(f"   ⭐ Medium Priority Targets: {self.stats.get('medium_priority_targets', 0)}")
-                    
-                    # Key metrics
-                    print(f"   📞 High Decision Maker Access: {self.stats.get('decision_maker_accessible', 0)}")
-                    print(f"   🔧 Need Website Upgrade: {self.stats.get('website_needs_upgrade', 0)}")
-                    
-                    # Business models
-                    if self.stats.get('vr_business_models'):
-                        print(f"\n   📊 Business Models:")
-                        for model, count in sorted(self.stats['vr_business_models'].items(), key=lambda x: x[1], reverse=True):
-                            model_display = {
-                                'direct_owner_small': '🏠 Small Direct Owner (1-5)',
-                                'direct_owner_medium': '🏘️ Medium Direct Owner (6-15)',
-                                'property_manager_small': '🏢 Small PM (10-50)',
-                                'property_manager_medium': '🏬 Medium PM (51-200)',
-                                'property_manager_large': '🏭 Large PM (200+)',
-                                'listing_platform_small': '📋 Small Directory',
-                                'listing_platform_large': '🌐 Large Platform',
-                                'software_provider': '💻 Software Provider',
-                                'marketing_agency': '📢 Marketing Agency'
-                            }.get(model, model)
-                            print(f"      {model_display}: {count}")
-                    
-                    # Property types
-                    if self.stats.get('vr_property_types'):
-                        print(f"\n   🏖️ Property Types:")
-                        for prop_type, count in sorted(self.stats['vr_property_types'].items(), key=lambda x: x[1], reverse=True):
-                            print(f"      {prop_type}: {count}")
-                
-                print(f"\n📝 CSV files are being updated in real-time!")
-                print(f"🎯 High-priority targets saved to separate file!")
-                print(f"💾 Progress is automatically saved and can be resumed")
+                # Property types
+                if self.stats.get('vr_property_types'):
+                    print(f"\n   🏖️ Property Types:")
+                    for prop_type, count in sorted(self.stats['vr_property_types'].items(), key=lambda x: x[1], reverse=True):
+                        print(f"      {prop_type}: {count}")
+            
+            print(f"\n📝 CSV files are being updated in real-time!")
+            print(f"🎯 High-priority targets saved to separate file!")
+            print(f"💾 Progress is automatically saved and can be resumed")
 
     def process_batch(self, batch_domains):
-            """Process a batch of domains"""
-            batch_results = []
+        """Process a batch of domains"""
+        batch_results = []
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_domain = {executor.submit(self.check_domain, domain): domain for domain in batch_domains}
             
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                future_to_domain = {executor.submit(self.check_domain, domain): domain for domain in batch_domains}
-                
-                for future in as_completed(future_to_domain):
-                    domain = future_to_domain[future]
-                    try:
-                        result = future.result()
-                        self.write_result_realtime(result)
-                        batch_results.append(result)
+            for future in as_completed(future_to_domain):
+                domain = future_to_domain[future]
+                try:
+                    result = future.result()
+                    self.write_result_realtime(result)
+                    batch_results.append(result)
+                    
+                    # Display progress
+                    if self.stats['total_processed'] % 5 == 0:
+                        self.display_live_stats()
+                    
+                    # Enhanced logging with new VR data
+                    status = "✓" if result['working'] else "✗"
+                    business = "Business" if result.get('is_business', False) else "Parked" if result.get('is_parked', False) else "Other"
+                    industry = result.get('industry_type', 'N/A')
+                    company_size = result.get('company_size', 'Unknown')
+                    
+                    # Format company size for display with preference indicators
+                    size_emoji = {
+                        'large_enterprise': '🏢',
+                        'medium_business': '🏬', 
+                        'small_business': '🏪⭐',  # Star indicates preferred target
+                        'unknown': '❓'
+                    }.get(company_size, '❓')
+                    
+                    # ENHANCED: Better VR logging
+                    if result.get('industry_type') == 'vacation_rental':
+                        priority = result.get('vr_priority', '')
+                        priority_emoji = {'high': '🎯', 'medium': '⭐', 'low': '⚠️'}.get(priority, '')
                         
-                        # Display progress
-                        if self.stats['total_processed'] % 5 == 0:
-                            self.display_live_stats()
+                        model = result.get('vr_business_model', '')
+                        props = result.get('vr_property_count', '')
+                        decision_maker = result.get('vr_decision_maker_accessible', '')
+                        needs_upgrade = '🔧' if result.get('vr_needs_website_upgrade') else ''
                         
-                        # Enhanced logging with new VR data
-                        status = "✓" if result['working'] else "✗"
-                        business = "Business" if result.get('is_business', False) else "Parked" if result.get('is_parked', False) else "Other"
-                        industry = result.get('industry_type', 'N/A')
-                        company_size = result.get('company_size', 'Unknown')
+                        logger.info(f"{status} {domain} - VR {priority_emoji} {model} | Props: {props} | DM: {decision_maker} {needs_upgrade}")
                         
-                        # Format company size for display with preference indicators
-                        size_emoji = {
-                            'large_enterprise': '🏢',
-                            'medium_business': '🏬', 
-                            'small_business': '🏪⭐',  # Star indicates preferred target
-                            'unknown': '❓'
-                        }.get(company_size, '❓')
-                        
-                        # ENHANCED: Better VR logging
-                        if result.get('industry_type') == 'vacation_rental':
-                            priority = result.get('vr_priority', '')
-                            priority_emoji = {'high': '🎯', 'medium': '⭐', 'low': '⚠️'}.get(priority, '')
-                            
-                            model = result.get('vr_business_model', '')
-                            props = result.get('vr_property_count', '')
-                            decision_maker = result.get('vr_decision_maker_accessible', '')
-                            needs_upgrade = '🔧' if result.get('vr_needs_website_upgrade') else ''
-                            
-                            logger.info(f"{status} {domain} - VR {priority_emoji} {model} | Props: {props} | DM: {decision_maker} {needs_upgrade}")
-                            
-                            # Special logging for high-priority targets
-                            if priority == 'high':
-                                business_info = result.get('business_info', {})
-                                logger.info(f"   🎯 HIGH PRIORITY: {business_info.get('company_name', '')[:30]}")
-                                logger.info(f"   📞 Contact: {business_info.get('primary_email', '')} | {business_info.get('primary_phone', '')}")
-                                logger.info(f"   📍 Location: {business_info.get('city', '')} {business_info.get('country', '')}")
-                                logger.info(f"   🎯 Score: {result.get('vr_target_score', 0)} | Factors: {', '.join(result.get('vr_target_factors', [])[:3])}")
-                        else:
-                            # Original logging for non-VR
-                            target_indicator = ""
-                            contact_info = ""
+                        # Special logging for high-priority targets
+                        if priority == 'high':
                             business_info = result.get('business_info', {})
-                            if business_info.get('primary_email') or business_info.get('primary_phone'):
-                                contact_info = " 📞"
-                            
-                            location_info = ""
-                            country = business_info.get('country', '')
-                            city = business_info.get('city', '')
-                            if country:
-                                country_flags = {
-                                    'United States': '🇺🇸',
-                                    'Canada': '🇨🇦',
-                                    'United Kingdom': '🇬🇧',
-                                    'Australia': '🇦🇺',
-                                    'Germany': '🇩🇪',
-                                    'France': '🇫🇷',
-                                    'Spain': '🇪🇸',
-                                    'Italy': '🇮🇹',
-                                    'Netherlands': '🇳🇱',
-                                    'Mexico': '🇲🇽'
-                                }
-                                flag = country_flags.get(country, '🌍')
-                                if city:
-                                    location_info = f" {flag}({city[:15]})"
-                                else:
-                                    location_info = f" {flag}"
-                            
-                            website_metrics = business_info.get('website_metrics', {})
-                            complexity_score = website_metrics.get('complexity_score', 0)
-                            if complexity_score > 25:
-                                website_indicator = " 🌐+"
-                            elif complexity_score < 10:
-                                website_indicator = " 🌐-"
-                            else:
-                                website_indicator = " 🌐"
-                            
-                            if result.get('failed_due_to_connectivity', False):
-                                logger.warning(f"🔗 {domain} - Connectivity issue")
-                            else:
-                                logger.info(f"{status} {domain} - {business} ({industry}) {size_emoji}{target_indicator}{contact_info}{location_info}{website_indicator}")
+                            logger.info(f"   🎯 HIGH PRIORITY: {business_info.get('company_name', '')[:30]}")
+                            logger.info(f"   📞 Contact: {business_info.get('primary_email', '')} | {business_info.get('primary_phone', '')}")
+                            logger.info(f"   📍 Location: {business_info.get('city', '')} {business_info.get('country', '')}")
+                            logger.info(f"   🎯 Score: {result.get('vr_target_score', 0)} | Factors: {', '.join(result.get('vr_target_factors', [])[:3])}")
+                    else:
+                        # Original logging for non-VR
+                        target_indicator = ""
+                        contact_info = ""
+                        business_info = result.get('business_info', {})
+                        if business_info.get('primary_email') or business_info.get('primary_phone'):
+                            contact_info = " 📞"
                         
-                    except Exception as e:
-                        logger.error(f"Error checking {domain}: {e}")
-            
-            return batch_results
+                        location_info = ""
+                        country = business_info.get('country', '')
+                        city = business_info.get('city', '')
+                        if country:
+                            country_flags = {
+                                'United States': '🇺🇸',
+                                'Canada': '🇨🇦',
+                                'United Kingdom': '🇬🇧',
+                                'Australia': '🇦🇺',
+                                'Germany': '🇩🇪',
+                                'France': '🇫🇷',
+                                'Spain': '🇪🇸',
+                                'Italy': '🇮🇹',
+                                'Netherlands': '🇳🇱',
+                                'Mexico': '🇲🇽'
+                            }
+                            flag = country_flags.get(country, '🌍')
+                            if city:
+                                location_info = f" {flag}({city[:15]})"
+                            else:
+                                location_info = f" {flag}"
+                        
+                        website_metrics = business_info.get('website_metrics', {})
+                        complexity_score = website_metrics.get('complexity_score', 0)
+                        if complexity_score > 25:
+                            website_indicator = " 🌐+"
+                        elif complexity_score < 10:
+                            website_indicator = " 🌐-"
+                        else:
+                            website_indicator = " 🌐"
+                        
+                        if result.get('failed_due_to_connectivity', False):
+                            logger.warning(f"🔗 {domain} - Connectivity issue")
+                        else:
+                            logger.info(f"{status} {domain} - {business} ({industry}) {size_emoji}{target_indicator}{contact_info}{location_info}{website_indicator}")
+                    
+                except Exception as e:
+                    logger.error(f"Error checking {domain}: {e}")
+        
+        return batch_results
 
     def check_domains_from_list(self, domains, output_dir='.', resume=True):
         """Check domains with batching and resume functionality"""
         if not self.check_network_connectivity():
             print("❌ No internet connectivity detected!")
-        if not self.wait_for_connectivity():
-            print("❌ Could not establish connectivity. Aborting.")
-            return []
+            if not self.wait_for_connectivity():
+                print("❌ Could not establish connectivity. Aborting.")
+                return []
 
         os.makedirs(output_dir, exist_ok=True)
 
