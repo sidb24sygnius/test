@@ -1836,8 +1836,6 @@ class DomainChecker:
             spam_found = []
             for keyword in hacking_keywords:
                 if keyword in text_lower:
-                    # Check if it's contextually appropriate (e.g., pharmacy site mentioning medications)
-                    if 'pharmacy' not in result.get('industry_type', '').lower():
                         spam_found.append(keyword)
                         hacked_score += 10
             
