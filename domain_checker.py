@@ -287,33 +287,13 @@ class DomainChecker:
                     'thousands of properties', 'rental marketplace'
                 ],
                 'url_indicators': [
-                    'airbnb.com', 'vrbo.com', 'booking.com', 'expedia.com',
-                    'tripadvisor.com', 'homeaway.com', 'vacasa.com', 'hometogo.com'
+                    'airbnb', 'vrbo', 'booking', 'expedia',
+                    'tripadvisor', 'homeaway', 'vacasa', 'hometogo'
                 ],
                 'exclusion_reason': 'marketplace_platform'
             },
             'third_party_listings': {
                 'url_patterns': [
-                    r'/property/\d+',
-                    r'/listing/\d+', 
-                    r'/rental/\d+',
-                    r'/room/\d+',
-                    r'/accommodation/\d+',
-                    r'/p/\d+',
-                    r'/r/\d+',
-                    r'/l/\d+',
-                    r'/properties/\d+',
-                    r'/rentals/\d+',
-                    r'/units?/\d+',
-                    r'/homes?/\d+',
-                    r'\?.*(?:property|listing|rental)_?id=\d+',
-                    r'\?.*id=\d+.*(?:property|listing|rental)',
-                    r'/detail/\d+',
-                    r'/view/\d+',
-                    r'/show/\d+',
-                    r'property\..*\.com',
-                    r'listing\..*\.com',
-                    r'rental\..*\.com'
                 ],
                 'content_indicators': [
                     'property id', 'listing id', 'rental id', 'property #', 'listing #',
@@ -754,6 +734,270 @@ class DomainChecker:
             }
         }
 
+    def preprocess_domains(self, domains):
+        """Preprocess domains: remove duplicates and filter out known large platforms"""
+        # Known large vacation rental platforms to exclude
+        excluded_platforms = [
+            'airbnb.com', 'airbnb.co', 'airbnb.',  # All Airbnb domains
+            'vrbo.com', 'vrbo.',
+            'booking.com', 'booking.',
+            'expedia.com', 'expedia.',
+            'tripadvisor.com', 'tripadvisor.',
+            'hotels.com', 'hotels.',
+            'homeaway.com', 'homeaway.',
+            'vacasa.com', 'vacasa.',
+            'flipkey.com', 'flipkey.',
+            'hometogo.com', 'hometogo.',
+            'rentals.com',
+            'marriott.com', 'marriott.',
+            'hilton.com', 'hilton.',
+            'hyatt.com', 'hyatt.',
+            'ihg.com', 'ihg.',
+            'choicehotels.com',
+            'wyndham.com', 'wyndham.',
+            'accor.com', 'accor.',
+            'agoda.com', 'agoda.',
+            'hostelworld.com',
+            'homestay.com',
+            'couchsurfing.com',
+            'wimdu.com',
+            'onefinestay.com',
+            'luxuryretreats.com',
+            'sonder.com',
+            'vacationrenter.com',
+            'tripping.com',
+            'houfy.com',
+            'stayz.com',
+            'ownersdirect.co',
+            'holidaylettings.com',
+            'homelidays.com',
+            'abritel.fr',
+            'fewo-direkt.de',
+            'redawning.com',
+            'turnkey.com'
+        ]
+        
+        # Clean and deduplicate domains
+        cleaned_domains = []
+        seen_domains = set()
+        excluded_count = 0
+        
+        for domain in domains:
+            # Clean the domain
+            domain = domain.strip().lower()
+            
+            # Remove protocol if present
+            if domain.startswith('http://'):
+                domain = domain[7:]
+            elif domain.startswith('https://'):
+                domain = domain[8:]
+            
+            # Remove www. if present
+            if domain.startswith('www.'):
+                domain = domain[4:]
+            
+            # Remove trailing slashes
+            domain = domain.rstrip('/')
+            
+            # Skip if already seen (duplicate)
+            if domain in seen_domains:
+                continue
+            
+            # Skip if it's a known large platform
+            is_excluded = False
+            for platform in excluded_platforms:
+                if platform in domain or domain.startswith(platform):
+                    is_excluded = True
+                    excluded_count += 1
+                    logger.info(f"🚫 Excluding known platform: {domain}")
+                    break
+            
+            if not is_excluded:
+                cleaned_domains.append(domain)
+                seen_domains.add(domain)
+        
+        logger.info(f"✅ Preprocessed domains: {len(domains)} → {len(cleaned_domains)}")
+        logger.info(f"   - Removed {len(domains) - len(cleaned_domains) - excluded_count} duplicates")
+        logger.info(f"   - Excluded {excluded_count} known platforms")
+        
+        return cleaned_domains
+
+
+    def is_known_large_vr_platform(self, domain, final_url, title, page_text):
+        """Check if this is a known large vacation rental platform"""
+        # Known large VR platforms and their variations
+        large_vr_platforms = {
+            'vacasa': ['vacasa.com', 'vacasa.co', 'myvacasa.com', 'vacasa.net', 'vacasarentals.com'],
+            'airbnb': ['airbnb.com', 'airbnb.co', 'airbnb.'],
+            'vrbo': ['vrbo.com', 'vrbo.co', 'vrbo.'],
+            'booking': ['booking.com', 'booking.'],
+            'expedia': ['expedia.com', 'expedia.'],
+            'tripadvisor': ['tripadvisor.com', 'tripadvisor.'],
+            'homeaway': ['homeaway.com', 'homeaway.'],
+            'hotels': ['hotels.com'],
+            'marriott': ['marriott.com', 'marriott.'],
+            'hilton': ['hilton.com', 'hilton.'],
+            'sonder': ['sonder.com', 'sonder.co'],
+            'turnkey': ['turnkey.com', 'turnkeyvr.com'],
+            'redawning': ['redawning.com'],
+            'hometogo': ['hometogo.com', 'hometogo.'],
+            'evolve': ['evolvevacationrental.com', 'evolve.com'],
+            'awaze': ['awaze.com'],
+            'novasol': ['novasol.com'],
+            'interhome': ['interhome.com'],
+            'belvilla': ['belvilla.com'],
+            'tui': ['tuivillas.com'],
+            'wyndham': ['wyndhamvacationrentals.com', 'wyndham.com']
+        }
+        
+        # Check domain and URL
+        domain_lower = domain.lower()
+        url_lower = (final_url or '').lower()
+        title_lower = (title or '').lower()
+        text_lower = page_text.lower()
+        
+        # Check each platform
+        for platform_name, platform_domains in large_vr_platforms.items():
+            # Check if platform name or domains appear
+            if platform_name in domain_lower or platform_name in url_lower:
+                return True, platform_name
+            
+            for platform_domain in platform_domains:
+                if platform_domain in domain_lower or platform_domain in url_lower:
+                    return True, platform_name
+            
+            # Also check title and prominent text
+            if platform_name in title_lower:
+                # Verify it's actually the platform, not just mentioning it
+                verification_phrases = [
+                    f'{platform_name} vacation rentals',
+                    f'welcome to {platform_name}',
+                    f'{platform_name} - ',
+                    f'{platform_name} | ',
+                    f'about {platform_name}',
+                    f'{platform_name} is',
+                    f'{platform_name} offers'
+                ]
+                if any(phrase in text_lower for phrase in verification_phrases):
+                    return True, platform_name
+        
+        # Additional checks for large platforms based on content
+        large_platform_indicators = [
+            ('thousands of properties', 'millions of properties', 'properties worldwide'),
+            ('list your property', 'become a host', 'host with us'),
+            ('traveler login', 'owner login', 'property manager login'),
+            ('download our app', 'get the app', 'mobile app'),
+            ('in over', 'across', 'countries', 'destinations worldwide'),
+            ('book your next vacation', 'find your perfect rental', 'search rentals')
+        ]
+        
+        indicator_count = 0
+        for indicator_group in large_platform_indicators:
+            if any(indicator in text_lower for indicator in indicator_group):
+                indicator_count += 1
+        
+        if indicator_count >= 3:
+            return True, 'large_platform_detected'
+        
+        return False, None
+    
+    
+    def is_parked_domain_fixed(self, page_text, title):
+        """Fixed parked domain detection - ignores domain name completely"""
+        # IGNORE the domain name in the URL - only check page content
+        text_to_check = page_text.lower()
+        
+        # Don't include title in check if it's just the domain name
+        if title and not any(tld in title.lower() for tld in ['.com', '.net', '.org', '.co', '.io']):
+            text_to_check += ' ' + title.lower()
+        
+        # List of VERY SPECIFIC parked page indicators
+        strong_parked_indicators = [
+            'this domain is for sale',
+            'buy this domain',
+            'domain is parked',
+            'domain parking',
+            'purchase this domain',
+            'domain available for sale',
+            'get this domain',
+            'own this domain',
+            'claim this domain',
+            'register this domain',
+            'domain auction',
+            'make an offer on this domain',
+            'inquire about purchasing',
+            'premium domain for sale',
+            'domain marketplace',
+            'undeveloped domain',
+            'domain is currently parked',
+            'parked by',
+            'parked at',
+            'this page is parked',
+            'hugedomains.com',
+            'sedo.com',
+            'dan.com',
+            'afternic.com'
+        ]
+        
+        # Coming soon indicators
+        coming_soon_indicators = [
+            'coming soon',
+            'launching soon',
+            'under construction',
+            'site under development',
+            'website coming soon',
+            'under maintenance',
+            'be right back',
+            'stay tuned',
+            'work in progress',
+            'currently unavailable'
+        ]
+        
+        # Default page indicators
+        default_page_indicators = [
+            'apache2 debian default',
+            'apache2 ubuntu default',
+            'welcome to nginx',
+            'it works!',
+            'default web page',
+            'test page for',
+            'placeholder page',
+            'cpanel default',
+            'plesk default'
+        ]
+        
+        # Check for strong parked indicators
+        for indicator in strong_parked_indicators:
+            if indicator in text_to_check:
+                return True
+        
+        # Check for coming soon pages
+        for indicator in coming_soon_indicators:
+            if indicator in text_to_check:
+                # Verify it's not just mentioning "coming soon" for a feature
+                word_count = len(page_text.split())
+                if word_count < 200:  # Small page with coming soon = parked
+                    return True
+        
+        # Check for default pages
+        for indicator in default_page_indicators:
+            if indicator in text_to_check:
+                return True
+        
+        # Check for minimal content with sale/auction keywords
+        word_count = len(page_text.split())
+        if word_count < 100:
+            if any(keyword in text_to_check for keyword in ['for sale', 'domain sale', 'buy now', 'purchase']):
+                return True
+        
+        # Suspended/error pages
+        if word_count < 50 and any(error in text_to_check for error in 
+                                   ['suspended', 'not found', 'error', 'forbidden']):
+            return True
+        
+        return False
+
+
     # NEW METHODS - Add these after existing methods
 
     def detect_property_count(self, text):
@@ -917,7 +1161,7 @@ class DomainChecker:
 
              # Bonus points for poor quality sites (they need help!)
             word_count = len(text.split())
-            if word_count < 500:
+            if word_count < 50:
                 upgrade_score += 30
                 upgrade_indicators.append("Very small website - needs content")
             
@@ -1423,6 +1667,25 @@ class DomainChecker:
     def check_domain(self, domain):
         """Check a single domain for availability and business information"""
         # Check connectivity before processing
+
+          # Quick check for known platforms
+        excluded_platforms = [
+            'airbnb', 'vrbo', 'booking.com', 'expedia', 'tripadvisor',
+            'hotels.com', 'homeaway', 'vacasa', 'flipkey', 'hometogo'
+        ]
+        
+        domain_lower = domain.lower()
+        for platform in excluded_platforms:
+            if platform in domain_lower:
+                return {
+                    'domain': domain,
+                    'working': False,
+                    'error': 'Known large platform - excluded',
+                    'is_parked': False,
+                    'is_business': False,
+                    'excluded_platform': True
+                }
+
         if not self.check_network_connectivity():
             if not self.wait_for_connectivity():
                 return {
@@ -1588,7 +1851,7 @@ class DomainChecker:
                 return  # Don't continue analysis on hacked sites
             
             # Check if parked
-            result['is_parked'] = self.is_parked_domain(page_text.lower(), result.get('title', ''))
+            result['is_parked'] = self.is_parked_domain_fixed(page_text, result.get('title', ''))
             
             # Always run classification for working websites
             if not result['is_parked']:
@@ -1695,6 +1958,9 @@ class DomainChecker:
             
         except Exception as e:
             logger.error(f"Error analyzing content: {e}")
+
+
+            
 
     # Also update the is_parked_domain function to be more content-aware
     def is_parked_domain(self, page_text, title):
@@ -3773,11 +4039,13 @@ class DomainChecker:
 
     def check_domains_from_list(self, domains, output_dir='.', resume=True):
         """Check domains with batching and resume functionality"""
-        if not self.check_network_connectivity():
-            print("❌ No internet connectivity detected!")
-            if not self.wait_for_connectivity():
-                print("❌ Could not establish connectivity. Aborting.")
-                return []
+        
+        # PREPROCESS DOMAINS FIRST
+        domains = self.preprocess_domains(domains)
+        
+        if not domains:
+            print("❌ No domains left to process after filtering!")
+            return []
 
         os.makedirs(output_dir, exist_ok=True)
 
