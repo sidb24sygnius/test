@@ -121,7 +121,7 @@ class DomainChecker:
             'it works!', 'apache2 ubuntu default page', 'welcome to nginx',
             'cpanel', 'whm', 'plesk', 'directadmin', 'hostgator', 'bluehost',
             'shared hosting', 'web hosting', 'hosting account', 'server default',
-            'this domain is hosted by', 'powered by', 'hosted on',
+            'this domain is hosted by', 'hosted on',
             'this site is temporarily unavailable', 'account suspended',
             'domain suspended', 'hosting account suspended', 'service unavailable',
             'bandwidth limit exceeded', 'quota exceeded', 'site maintenance',
@@ -1713,12 +1713,48 @@ class DomainChecker:
             strong_parked_indicators = [
                 'domain for sale', 'buy this domain', 'this domain is for sale',
                 'domain parking', 'hugedomains', 'godaddy auction'
+                'domain for sale', 'buy this domain', 'parked domain', 'coming soon',
+                'under construction', 'this domain is for sale', 'expired domain',
+                'register this domain', 'domain parking', 'premium domain',
+                'inquire about this domain', 'make an offer', 'domain auction',
+                'brandable domain', 'great domain', 'perfect domain', 'domain available',
+                'inquire now', 'buy now', 'purchase this domain', 'acquire this domain',
+                'godaddy', 'namecheap', 'sedo', 'afternic', 'hugedomains', 'dan.com', 
+                'escrow.com', 'flippa', 'brandpa', 'squadhelp', 'undeveloped',
+                'domain.com', 'name.com', 'networksolutions', 'dynadot',
+                'brandable.com', 'brandroot', 'domainhostingview', 'whois.net',
+                'domainmarket', 'premiumdomains', 'brandbucket', 'namerific',
+                'placeholder page', 'temporary page', 'site coming soon',
+                'website coming soon', 'launching soon', 'site under development',
+                'default page', 'apache2 debian default page', 'nginx default page',
+                'it works!', 'apache2 ubuntu default page', 'welcome to nginx',
+                'cpanel', 'whm', 'plesk', 'directadmin', 'hostgator', 'bluehost',
+                'shared hosting', 'web hosting', 'hosting account', 'server default',
+                'this domain is hosted by', 'hosted on',
+                'this site is temporarily unavailable', 'account suspended',
+                'domain suspended', 'hosting account suspended', 'service unavailable',
+                'bandwidth limit exceeded', 'quota exceeded', 'site maintenance',
+                'temporarily down', 'website offline', 'server error',
+                'suspended domain', 'suspended account', 'terms of service violation',
+                'directory listing', 'index of /', 'apache directory listing',
+                'welcome to your new website', 'congratulations on your new domain',
+                'this domain has been registered', 'domain successfully registered',
+                'thank you for registering', 'domain registration successful',
+                'business for sale', 'website for sale', 'established domain',
+                'traffic included', 'seo optimized domain', 'keyword rich domain',
+                'exact match domain', 'premium .com domain', 'valuable domain',
+                'investment opportunity', 'revenue generating', 'monetized domain',
+                'landing page', 'lead capture', 'affiliate marketing', 'monetization',
+                'ppc ready', 'adsense ready', 'revenue potential', 'traffic value',
+                'type-in traffic', 'direct navigation', 'category killer',
+                '.gallery domain', '.ist domain', '.qa domain', 'new tld',
+                'premium extension', 'new domain extension'
             ]
             return any(indicator in text_to_check for indicator in strong_parked_indicators)
         
         # Otherwise, use normal parked detection
         word_count = len(page_text.split())
-        if word_count < 100:
+        if word_count < 20:
             minimal_patterns = [
                 'domain', 'sale', 'buy', 'purchase', 'available', 'premium',
                 'coming soon', 'under construction', 'placeholder'
@@ -2237,8 +2273,8 @@ class DomainChecker:
         
         # Check for listing platform branding in content
         platform_indicators = [
-            'powered by airbnb', 'vrbo listing', 'booking.com property',
-            'tripadvisor rental', 'homeaway property', 'vacasa managed',
+            'airbnb', 'vrbo', 'booking.com',
+            'tripadvisor', 'homeaway', 'vacasa',
             'listed on', 'featured on', 'available on', 'book through',
             'reserve on', 'property management by', 'managed by'
         ]
@@ -2498,7 +2534,7 @@ class DomainChecker:
                 large_score += 10  # Very large website = big business
             elif word_count > 2000:
                 medium_score += 5  # Large website = medium business
-            elif word_count < 500:
+            elif word_count < 20:
                 small_score += 5   # Small website = small business (good sign)
             
             # Navigation complexity
