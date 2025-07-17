@@ -1024,7 +1024,7 @@ class DomainChecker:
             # Get additional content from other pages
             additional_content = ''
             if self.enable_deep_crawl and final_url:  # <-- ADD THIS LINE HERE
-            additional_content = self.crawl_additional_pages(final_url, soup)  # <-- AND THIS LINE HERE
+                additional_content = self.crawl_additional_pages(final_url, soup)  # <-- AND THIS LINE HERE
             logger.info(f"Crawled {len(additional_content.split())} additional words from other pages")
         
             # Combine all content
