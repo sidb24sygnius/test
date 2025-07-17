@@ -29,8 +29,9 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %
 logger = logging.getLogger(__name__)
 
 class DomainChecker:
-    def __init__(self, timeout=8, max_workers=10, batch_size=50):
+    def __init__(self, timeout=8, max_workers=10, batch_size=50, enable_deep_crawl=True):
         self.timeout = timeout
+        self.enable_deep_crawl = enable_deep_crawl
         self.max_workers = max_workers
         self.batch_size = batch_size
         self.session = requests.Session()
@@ -1018,162 +1019,132 @@ class DomainChecker:
 
     # 2. FIX: Enhanced vacation rental classification to better detect listing sites
     def enhanced_classify_vacation_rental_business(self, soup, page_text, title, description, final_url, business_info):
-        """Enhanced classification with better listing site detection - FIXED VERSION"""
+        """Enhanced classification focusing on CONTENT, not domain names"""
         try:
-            all_text = (page_text + ' ' + (title or '') + ' ' + (description or '')).lower()
-            
+            # Get additional content from other pages
+            additional_content = ''
+            if self.enable_deep_crawl and final_url:  # <-- ADD THIS LINE HERE
+            additional_content = self.crawl_additional_pages(final_url, soup)  # <-- AND THIS LINE HERE
+            logger.info(f"Crawled {len(additional_content.split())} additional words from other pages")
+        
+            # Combine all content
+            all_text = (page_text + ' ' + (title or '') + ' ' + (description or '') + ' ' + additional_content).lower()
+        
             # Initialize tracking
             model_scores = {}
+            property_count_info = self.detect_property_count(all_text)
+            decision_maker_score = self.calculate_decision_maker_score(soup, page_text, business_info)
+            website_upgrade_info = self.detect_website_upgrade_needs(soup, page_text, None)
+            property_type_info = self.classify_vr_property_type(page_text, title, description)
             
-            # PRIORITY CHECK: Domain-based classification for listing sites
-            domain = (final_url or '').lower()
+            # REMOVED: Domain-based classification
+            # Now we ONLY look at content
             
-            # Strong indicators of listing/directory sites based on domain
-            if any(pattern in domain for pattern in [
-                'vacationrentals.', 'rentals.', 'rental.', 
-                'properties.', 'listings.'
-            ]):
-                # Check if it's a generic directory
-                if any(indicator in all_text for indicator in [
-                    'search properties', 'find rentals', 'browse listings',
-                    'vacation rental directory', 'rental listings',
-                    'compare prices', 'search all', 'find your perfect'
-                ]):
-                    model_scores['listing_platform_large'] = 100
-                # Or if title is very generic
-                elif title and title.lower().strip() in [
-                    'vacation rentals', 'rentals', 'properties', 
-                    'vacation rental', 'holiday rentals'
-                ]:
-                    model_scores['listing_platform_large'] = 80
-                # Or if it mentions multiple locations/countries
-                elif len(re.findall(r'\b(?:locations?|cities|countries|destinations?)\b', all_text)) > 5:
-                    model_scores['listing_platform_large'] = 70
+
+            # Optionally crawl additional pages for vacation rental sites
+            additional_content = ''
+            if result.get('industry_type') == 'vacation_rental' or 'vacation' in page_text.lower():
+                additional_content = self.crawl_additional_pages(result.get('final_url', ''), soup)
+            
+            # Use combined content for classification
+            combined_text = page_text + ' ' + additional_content
+            
+            # 1. DEEP CONTENT ANALYSIS - Look for actual rental operator indicators
+            rental_operator_score = 0
+            rental_operator_indicators = []
+            
+            # Strong indicators they actually rent properties
+            actual_rental_phrases = [
+                # Ownership indicators
+                'our vacation rental', 'our property', 'our home', 'our beach house',
+                'our cabin', 'our cottage', 'we own', 'property we manage',
+                'welcome to our', 'stay at our', 'rent our', 'book our',
+                
+                # Direct booking language
+                'book directly with us', 'book direct', 'no booking fees',
+                'contact us directly', 'call us to book', 'email for rates',
+                'check our calendar', 'see availability', 'reserve now',
+                
+                # Property descriptions
+                'sleeps', 'bedrooms', 'bathrooms', 'square feet', 'accommodates',
+                'fully equipped kitchen', 'private pool', 'ocean view', 'mountain view',
+                'walking distance', 'minutes from', 'located in', 'situated on',
+                
+                # Amenities lists
+                'amenities include', 'features include', 'property features',
+                'what we offer', 'included in your stay', 'guest access',
+                
+                # Rates and policies
+                'nightly rate', 'weekly rate', 'seasonal rates', 'minimum stay',
+                'cleaning fee', 'security deposit', 'cancellation policy',
+                'house rules', 'check-in time', 'check-out time',
+                
+                # Local host indicators
+                'your host', 'meet your host', 'about us', 'why choose us',
+                'local recommendations', 'area guide', 'things to do',
+                'we recommend', 'our favorite', 'local tips'
+            ]
+            
+            for phrase in actual_rental_phrases:
+                if phrase in all_text:
+                    rental_operator_score += 10
+                    rental_operator_indicators.append(phrase)
+            
+            # 2. CHECK FOR LISTING PLATFORM INDICATORS (content-based)
+            listing_platform_score = 0
+            listing_indicators = []
+            
+            listing_platform_phrases = [
+                # Search functionality
+                'search properties', 'find rentals', 'browse listings',
+                'filter results', 'sort by price', 'map view',
+                'search by location', 'advanced search', 'refine search',
+                
+                # Multiple properties language
+                'thousands of properties', 'hundreds of rentals', 
+                'properties worldwide', 'rentals in multiple',
+                'compare properties', 'similar listings',
+                
+                # Platform features
+                'list your property', 'become a host', 'host dashboard',
+                'traveler reviews', 'verified properties', 'trust and safety',
+                'secure payments', 'booking protection', '24/7 support',
+                
+                # Aggregator language
+                'best prices guaranteed', 'price match', 'deals from',
+                'compare rates', 'lowest prices', 'exclusive deals'
+            ]
+            
+            for phrase in listing_platform_phrases:
+                if phrase in all_text:
+                    listing_platform_score += 15
+                    listing_indicators.append(phrase)
+            
+            # 3. ANALYZE PAGE STRUCTURE for actual rental content
+            content_structure_score = self.analyze_rental_content_structure(soup, all_text)
+            
+            # 4. CHECK FOR SPECIFIC PROPERTY DETAILS
+            has_specific_property = self.detect_specific_property_details(soup, all_text)
+            
+            # 5. LOOK FOR BOOKING/INQUIRY FORMS
+            has_direct_booking = self.detect_direct_booking_capability(soup)
+            
+            # Calculate model scores based on CONTENT ONLY
+            if rental_operator_score > 30 and has_specific_property:
+                if property_count_info['count'] and property_count_info['count'] <= 5:
+                    model_scores['direct_owner_small'] = rental_operator_score + 50
+                elif property_count_info['count'] and property_count_info['count'] <= 15:
+                    model_scores['direct_owner_medium'] = rental_operator_score + 40
                 else:
-                    # Still likely a listing site but smaller
-                    model_scores['listing_platform_small'] = 50
+                    model_scores['property_manager_small'] = rental_operator_score + 40
             
-            # Check for actual content
-            word_count = len(page_text.split())
+            if listing_platform_score > 40:
+                model_scores['listing_platform_large'] = listing_platform_score
             
-            # For sites with very little content but VR domain, assume listing platform
-            if word_count < 300 and 'vacationrentals' in domain:
-                model_scores['listing_platform_small'] = model_scores.get('listing_platform_small', 0) + 40
-            
-            # Rest of the classification logic continues...
-            # (Keep the original logic but with these additions)
-            
-            # If domain strongly suggests listing platform, reduce other scores
-            if model_scores.get('listing_platform_large', 0) > 50 or model_scores.get('listing_platform_small', 0) > 30:
-                for model in ['property_manager_small', 'property_manager_medium', 'direct_owner_small', 'direct_owner_medium']:
-                    model_scores[model] = max(0, model_scores.get(model, 0) - 50)
-                
-                model_scores[model_name] = score
-            
-            # Add this check BEFORE checking for software provider keywords
-            if any(phrase in all_text for phrase in [
-                'our vacation rental homes', 'our vacation rentals', 
-                'we manage', 'property management company',
-                'local property management', 'vacation rental management',
-                'our properties include', 'our rental homes'
-            ]):
-                # Strong indicator of actual property management company
-                model_scores['property_manager_small'] = model_scores.get('property_manager_small', 0) + 50
-                model_scores['property_manager_medium'] = model_scores.get('property_manager_medium', 0) + 30
-                
-            # Reduce software score if property management indicators are found
-            if model_scores.get('property_manager_small', 0) > 20 or model_scores.get('property_manager_medium', 0) > 20:
-                model_scores['software_provider'] = max(0, model_scores.get('software_provider', 0) - 30)
-                
-                # Fix for small property managers being misclassified
-            if any(phrase in all_text for phrase in [
-                'property management costa rica', 'costa rica property',
-                'manage properties in', 'property management services',
-                'vacation rental management', 'we manage vacation'
-            ]):
-                model_scores['property_manager_small'] = model_scores.get('property_manager_small', 0) + 40
-                model_scores['software_provider'] = max(0, model_scores.get('software_provider', 0) - 40)
-            
-            # Fix for large listing platforms with many locations
-            location_count = len(re.findall(r'\b(?:locations?|cities|countries|destinations?)\b', all_text))
-            if location_count > 10 or 'multiple countries' in all_text or 'worldwide' in all_text:
-                model_scores['listing_platform_large'] = model_scores.get('listing_platform_large', 0) + 50
-                model_scores['property_manager_small'] = max(0, model_scores.get('property_manager_small', 0) - 30)
-            
-            # Fix for domains with "vacationrentals" in them
-            if 'vacationrentals' in (final_url or '').lower():
-                # Don't automatically assume it's a listing - check content
-                word_count = len(page_text.split())
-                if word_count < 500:  # Small site
-                    model_scores['property_manager_small'] = model_scores.get('property_manager_small', 0) + 20
-                    model_scores['third_party_listing'] = max(0, model_scores.get('third_party_listing', 0) - 20)
-
-
-            # Determine best model
-            if max(model_scores.values()) == 0:
-                best_model = 'unknown'
-            else:
-                best_model = max(model_scores, key=model_scores.get)
-            
-            model_config = self.enhanced_vr_business_models.get(best_model, {})
-            
-            # Calculate overall target score
-            target_score = 0
-            target_factors = []
-            
-            # Model is target
-            if model_config.get('is_target', False):
-                target_score += 40
-                target_factors.append(f"Target business model: {best_model}")
-            
-            # High decision maker accessibility
-            if decision_maker_score['level'] == 'high':
-                target_score += 30
-                target_factors.append("High decision maker accessibility")
-            elif decision_maker_score['level'] == 'medium':
-                target_score += 15
-                target_factors.append("Medium decision maker accessibility")
-            
-            # Website needs upgrade
-            if website_upgrade_info['needs_upgrade']:
-                target_score += 25
-                target_factors.append("Website needs upgrade")
-            
-            # Property count in sweet spot (10-100)
-            if property_count_info['count'] and 10 <= property_count_info['count'] <= 100:
-                target_score += 20
-                target_factors.append(f"Good property count: {property_count_info['count']}")
-            
-            # Geographic scope (prefer local/regional)
-            geographic_score = self.detect_geographic_scope(all_text)
-            if geographic_score['scope'] in ['local', 'regional']:
-                target_score += 15
-                target_factors.append(f"Good geographic scope: {geographic_score['scope']}")
-            
-            # Calculate final assessment
-            is_target = target_score >= 60
-            priority = 'high' if target_score >= 80 else 'medium' if target_score >= 60 else 'low'
-            
-            return {
-                'business_model': best_model,
-                'is_target_customer': is_target,
-                'priority': priority,
-                'target_score': target_score,
-                'target_factors': target_factors,
-                'model_confidence': min(95, model_scores[best_model] * 2) if best_model != 'unknown' else 0,
-                'property_count': property_count_info['count'],
-                'property_count_confidence': property_count_info['confidence'],
-                'decision_maker_accessible': decision_maker_score['level'],
-                'decision_maker_score': decision_maker_score['score'],
-                'needs_website_upgrade': website_upgrade_info['needs_upgrade'],
-                'upgrade_indicators': website_upgrade_info['indicators'],
-                'property_type': property_type_info['type'],
-                'geographic_scope': geographic_score['scope'],
-                'exclusion_reason': model_config.get('exclusion_reason', '') if not is_target else ''
-            }
+            # ... rest of classification logic based on content ...
             
         except Exception as e:
-            logger.error(f"Error in enhanced VR classification: {e}")
+            logger.error(f"Error in content-focused classification: {e}")
             return {
                 'business_model': 'unknown',
                 'is_target_customer': False,
@@ -1181,6 +1152,110 @@ class DomainChecker:
                 'target_score': 0,
                 'exclusion_reason': 'classification_error'
             }
+
+    def analyze_rental_content_structure(self, soup, text):
+        """Analyze page structure for vacation rental content patterns"""
+        score = 0
+        
+        # Look for property detail sections
+        property_sections = soup.find_all(['div', 'section'], class_=re.compile(
+            r'property|rental|accommodation|listing|details|features|amenities', re.I
+        ))
+        score += len(property_sections) * 5
+        
+        # Look for rate/pricing tables
+        rate_elements = soup.find_all(['table', 'div'], class_=re.compile(r'rate|price|tariff', re.I))
+        if rate_elements:
+            score += 15
+        
+        # Look for availability calendars
+        calendar_elements = soup.find_all(['div', 'table', 'iframe'], class_=re.compile(
+            r'calendar|availability|booking|schedule', re.I
+        ))
+        if calendar_elements:
+            score += 20
+        
+        # Look for photo galleries
+        gallery_elements = soup.find_all(['div', 'section'], class_=re.compile(
+            r'gallery|photos|images|slideshow', re.I
+        ))
+        if gallery_elements:
+            # Check if it's property photos vs stock photos
+            img_alts = [img.get('alt', '').lower() for img in soup.find_all('img')]
+            property_photo_keywords = ['bedroom', 'kitchen', 'living', 'bathroom', 'view', 'pool', 'exterior']
+            property_photos = sum(1 for alt in img_alts if any(keyword in alt for keyword in property_photo_keywords))
+            if property_photos > 3:
+                score += 15
+        
+        return score
+
+    def detect_specific_property_details(self, soup, text):
+        """Check if the page describes a specific property (not a directory)"""
+        
+        # Count specific property details
+        detail_count = 0
+        
+        # Check for specific number of bedrooms/bathrooms
+        bedroom_match = re.search(r'\b(\d+)\s*(?:bed|br|bedroom)', text)
+        bathroom_match = re.search(r'\b(\d+)\s*(?:bath|ba|bathroom)', text)
+        if bedroom_match and bathroom_match:
+            detail_count += 2
+        
+        # Check for specific address or location
+        address_patterns = [
+            r'\d+\s+\w+\s+(?:street|st|avenue|ave|road|rd|drive|dr)',
+            r'located at\s+[\w\s,]+',
+            r'address:\s*[\w\s,]+',
+        ]
+        for pattern in address_patterns:
+            if re.search(pattern, text, re.I):
+                detail_count += 1
+                break
+        
+        # Check for specific amenity lists
+        if 'amenities:' in text or 'features:' in text or 'includes:' in text:
+            detail_count += 1
+        
+        # Check for property-specific description
+        description_keywords = ['spacious', 'cozy', 'renovated', 'modern', 'charming', 
+                              'comfortable', 'private', 'peaceful', 'stunning views']
+        description_count = sum(1 for keyword in description_keywords if keyword in text)
+        if description_count >= 3:
+            detail_count += 1
+        
+        return detail_count >= 3  # Need at least 3 specific details
+
+    def detect_direct_booking_capability(self, soup):
+        """Check if site has direct booking/inquiry capability"""
+        
+        # Look for inquiry/booking forms
+        forms = soup.find_all('form')
+        for form in forms:
+            form_text = form.get_text().lower()
+            form_inputs = form.find_all(['input', 'textarea', 'select'])
+            
+            # Check if it's a booking/inquiry form
+            booking_keywords = ['inquiry', 'booking', 'reservation', 'check-in', 
+                              'check-out', 'guests', 'dates', 'availability']
+            if any(keyword in form_text for keyword in booking_keywords):
+                return True
+            
+            # Check form field names
+            for input_field in form_inputs:
+                field_name = (input_field.get('name', '') + input_field.get('id', '')).lower()
+                if any(keyword in field_name for keyword in booking_keywords):
+                    return True
+        
+        # Look for email/phone with booking context
+        booking_context = ['book', 'reserve', 'inquiry', 'availability', 'rates']
+        email_pattern = r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        
+        for context in booking_context:
+            if context in text and re.search(email_pattern, text):
+                return True
+        
+        return False        
+    
 
     def detect_geographic_scope(self, text):
         """Detect geographic scope of business"""
@@ -1477,7 +1552,7 @@ class DomainChecker:
             return False
 
     def analyze_content(self, response, result):
-        """Analyze webpage content - ENHANCED VERSION"""
+        """Analyze webpage content - FIXED VERSION with new detections"""
         try:
             soup = BeautifulSoup(response.content, 'html.parser')
             
@@ -1491,42 +1566,41 @@ class DomainChecker:
             if desc_tag:
                 result['description'] = desc_tag.get('content', '').strip()
             
-            page_text = soup.get_text().lower()
+            page_text = soup.get_text()
             
-               # Check if parked with FIXED function
-            result['is_parked'] = self.is_parked_domain(page_text, result.get('title', ''))
-        
-            # For vacation rental sites, always try to classify even if not marked as "business"
-            is_vr_site = any(term in page_text for term in [
-                'vacation rental', 'holiday rental', 'property rental',
-                'beach house', 'cabin rental', 'vacation home', 'villa rental'
-            ]) or 'vacationrentals' in (result.get('final_url', '') or '').lower()
+            # NEW: Detect hacked websites
+            hacked_detection = self.detect_hacked_website(soup, page_text, response)
+            result['is_hacked'] = hacked_detection['is_hacked']
+            result['hacked_indicators'] = hacked_detection['indicators']
+            result['hacked_confidence'] = hacked_detection['confidence']
             
-            if not result['is_parked']:
-                result['is_business'] = self.is_business_website(soup, page_text)
-                
-                # Force business=True for obvious VR sites
-                if is_vr_site and not result['is_business']:
-                    result['is_business'] = True
-            else:
-                result['is_business'] = False
+            # NEW: Detect language
+            language_detection = self.detect_website_language(soup, page_text)
+            result['primary_language'] = language_detection['primary_language']
+            result['is_non_english'] = language_detection['is_non_english']
+            result['language_confidence'] = language_detection['confidence']
             
-            # Always classify VR sites regardless of business flag
-            if is_vr_site or not result['is_parked']:
-                
+            # If website is hacked, mark it appropriately
+            if result['is_hacked']:
+                result['is_parked'] = False  # Not parked, but hacked
+                result['is_business'] = False  # Don't treat hacked sites as businesses
+                result['error'] = 'Website appears to be hacked'
+                return  # Don't continue analysis on hacked sites
+            
+            # Check if parked
+            result['is_parked'] = self.is_parked_domain(page_text.lower(), result.get('title', ''))
+            
             # Always run classification for working websites
-                if not result['is_parked']:
-                    result['is_business'] = self.is_business_website(soup, page_text)
+            if not result['is_parked']:
+                result['is_business'] = self.is_business_website(soup, page_text.lower())
             else:
                 result['is_business'] = False
             
-            # Run industry and size classification for all working sites (business or not)
-            # This ensures vacation rental sites get classified even if they don't meet all "business" criteria
+            # Run industry and size classification for all working sites
             try:
-                industry_result = self.classify_industry(page_text, result.get('title', ''), result.get('description', ''))
+                industry_result = self.classify_industry(page_text.lower(), result.get('title', ''), result.get('description', ''))
                 result['industry_type'] = industry_result.get('industry', '')
                 result['industry_confidence'] = industry_result.get('confidence', 0)
-                logger.info(f"Industry classification for {result['domain']}: {result['industry_type']} (confidence: {result['industry_confidence']})")
             except Exception as e:
                 logger.error(f"Error in industry classification for {result['domain']}: {e}")
                 result['industry_type'] = ''
@@ -1535,11 +1609,10 @@ class DomainChecker:
             # Only classify company size for business websites
             if result['is_business']:
                 try:
-                    size_result = self.classify_company_size(soup, page_text, result.get('title', ''), result.get('description', ''))
+                    size_result = self.classify_company_size(soup, page_text.lower(), result.get('title', ''), result.get('description', ''))
                     result['company_size'] = size_result.get('size', '')
                     result['size_confidence'] = size_result.get('confidence', 0)
                     result['size_details'] = size_result.get('details', {})
-                    logger.info(f"Company size for {result['domain']}: {result['company_size']} (confidence: {result['size_confidence']})")
                 except Exception as e:
                     logger.error(f"Error in company size classification for {result['domain']}: {e}")
                     result['company_size'] = ''
@@ -1558,11 +1631,11 @@ class DomainChecker:
                 result['size_details'] = {}
                 result['business_info'] = {}
             
-            # ENHANCED: For vacation rental industry, use new classification
+            # For vacation rental industry, use enhanced classification
             if result['industry_type'] == 'vacation_rental':
                 try:
                     vr_classification = self.enhanced_classify_vacation_rental_business(
-                        soup, page_text, result.get('title', ''), 
+                        soup, page_text.lower(), result.get('title', ''), 
                         result.get('description', ''), result.get('final_url', ''),
                         result.get('business_info', {})
                     )
@@ -1584,37 +1657,30 @@ class DomainChecker:
                     result['vr_geographic_scope'] = vr_classification['geographic_scope']
                     result['vr_exclusion_reason'] = vr_classification['exclusion_reason']
                     
-                    # Log high-priority targets
-                    if vr_classification['priority'] == 'high':
-                        logger.info(f"🎯 HIGH PRIORITY TARGET: {result['domain']}")
-                        logger.info(f"   Model: {vr_classification['business_model']}")
-                        logger.info(f"   Properties: {vr_classification['property_count']}")
-                        logger.info(f"   Decision Maker: {vr_classification['decision_maker_accessible']}")
-                        logger.info(f"   Needs Upgrade: {vr_classification['needs_website_upgrade']}")
-                        
                 except Exception as e:
                     logger.error(f"Error in enhanced VR classification for {result['domain']}: {e}")
-                    # Fallback to original classification
-                    try:
-                        business_model_result = self.classify_vacation_rental_business_model(
-                            soup, page_text, result.get('title', ''), result.get('description', ''), result.get('final_url', '')
-                        )
-                        result['vr_business_model'] = business_model_result.get('business_model', '')
-                        result['vr_exclusion_reason'] = business_model_result.get('exclusion_reason', '') or ''
-                        result['is_target_customer'] = business_model_result.get('is_target_customer', '')
-                        result['vr_model_confidence'] = business_model_result.get('confidence', 0)
-                    except:
-                        result['vr_business_model'] = ''
-                        result['vr_exclusion_reason'] = ''
-                        result['is_target_customer'] = ''
-                        result['vr_model_confidence'] = 0
+                    # Set default values
+                    result['vr_business_model'] = ''
+                    result['vr_exclusion_reason'] = ''
+                    result['is_target_customer'] = ''
+                    result['vr_model_confidence'] = 0
+                    result['vr_priority'] = ''
+                    result['vr_target_score'] = 0
+                    result['vr_target_factors'] = []
+                    result['vr_property_count'] = ''
+                    result['vr_property_count_confidence'] = 0
+                    result['vr_decision_maker_accessible'] = ''
+                    result['vr_decision_maker_score'] = 0
+                    result['vr_needs_website_upgrade'] = False
+                    result['vr_upgrade_indicators'] = []
+                    result['vr_property_type'] = ''
+                    result['vr_geographic_scope'] = ''
             else:
                 # For non-vacation rental industries, set default values
                 result['vr_business_model'] = ''
                 result['vr_exclusion_reason'] = ''
                 result['is_target_customer'] = ''
                 result['vr_model_confidence'] = 0
-                # Set new fields to empty
                 result['vr_priority'] = ''
                 result['vr_target_score'] = 0
                 result['vr_target_factors'] = []
@@ -1630,37 +1696,29 @@ class DomainChecker:
         except Exception as e:
             logger.error(f"Error analyzing content: {e}")
 
+    # Also update the is_parked_domain function to be more content-aware
     def is_parked_domain(self, page_text, title):
-        """Check if domain is parked - FIXED VERSION"""
+        """Check if domain is parked - with vacation rental awareness"""
         text_to_check = (page_text + ' ' + title.lower()).lower()
         
-        # First check word count - if site has substantial content, it's not parked
-        word_count = len(page_text.split())
-        if word_count > 200:  # Changed from 100 to 200
-            # For sites with content, only mark as parked if very clear indicators
+        # First, check if it's actually a vacation rental site with minimal content
+        vr_keywords = ['vacation rental', 'holiday home', 'beach house', 'cabin', 
+                       'cottage', 'villa', 'property rental', 'book now', 'check availability']
+        
+        vr_score = sum(1 for keyword in vr_keywords if keyword in text_to_check)
+        
+        # If it has vacation rental keywords, be more lenient
+        if vr_score >= 2:
+            # Only mark as parked if VERY clear indicators
             strong_parked_indicators = [
                 'domain for sale', 'buy this domain', 'this domain is for sale',
-                'domain parking', 'hugedomains', 'godaddy auction', 'sedo.com',
-                'this website is for sale!', 'domain is available for sale',
-                'premium domain for sale', 'get this domain'
+                'domain parking', 'hugedomains', 'godaddy auction'
             ]
-            for indicator in strong_parked_indicators:
-                if indicator in text_to_check:
-                    return True
-            return False  # Don't mark content-rich sites as parked
+            return any(indicator in text_to_check for indicator in strong_parked_indicators)
         
-        # For minimal content sites, check more indicators
+        # Otherwise, use normal parked detection
+        word_count = len(page_text.split())
         if word_count < 100:
-            # But exclude vacation rental sites with minimal content
-            if 'vacation rental' in text_to_check or 'property' in text_to_check:
-                # Check if it's really parked or just a simple VR site
-                if any(phrase in text_to_check for phrase in [
-                    'our properties', 'our rentals', 'book now', 'check availability',
-                    'contact us', 'email us', 'call us'
-                ]):
-                    return False  # It's a simple but real VR site
-            
-            # Original minimal content checks
             minimal_patterns = [
                 'domain', 'sale', 'buy', 'purchase', 'available', 'premium',
                 'coming soon', 'under construction', 'placeholder'
@@ -1669,18 +1727,336 @@ class DomainChecker:
             if pattern_count >= 3:
                 return True
         
-        # Check enhanced indicators
+        # Check original indicators
         for indicator in self.parked_indicators:
             if indicator in text_to_check:
-                # Special handling for vacation rental sites
-                if 'vacation rental' in text_to_check:
-                    # Double-check it's really parked
-                    if 'for sale!' in text_to_check or 'domain for sale' in text_to_check:
-                        return True
-                    continue  # Skip this indicator for VR sites
                 return True
         
         return False
+
+    def crawl_additional_pages(self, base_url, soup):
+        """Crawl key pages to gather more content"""
+        try:
+            from urllib.parse import urljoin, urlparse
+            
+            important_pages = []
+            
+            # Find links to important pages
+            for link in soup.find_all('a', href=True):
+                href = link.get('href', '').lower()
+                text = link.get_text().lower()
+                
+                # Look for important page indicators
+                if any(keyword in text or keyword in href for keyword in [
+                    'properties', 'rentals', 'rates', 'availability', 
+                    'amenities', 'gallery', 'photos', 'about', 'contact',
+                    'our home', 'our property', 'the house', 'the property'
+                ]):
+                    full_url = urljoin(base_url, link.get('href'))
+                    # Only crawl same domain
+                    if urlparse(full_url).netloc == urlparse(base_url).netloc:
+                        if full_url not in important_pages and full_url != base_url:
+                            important_pages.append(full_url)
+            
+            # Crawl up to 5 additional pages
+            additional_content = []
+            for url in important_pages[:5]:
+                try:
+                    response = self.session.get(url, timeout=5, verify=False)
+                    if response.status_code == 200:
+                        page_soup = BeautifulSoup(response.content, 'html.parser')
+                        page_text = page_soup.get_text()
+                        # Only add if it has substantial content
+                        if len(page_text.split()) > 100:
+                            additional_content.append(page_text)
+                            logger.debug(f"Crawled additional page: {url}")
+                except Exception as e:
+                    logger.debug(f"Failed to crawl {url}: {e}")
+                    continue
+            
+            return ' '.join(additional_content)
+            
+        except Exception as e:
+            logger.error(f"Error in crawl_additional_pages: {e}")
+            return ''
+
+        # 2. ADD HACKED WEBSITE DETECTION
+    def detect_hacked_website(self, soup, page_text, response):
+        """Detect if website has been hacked"""
+        try:
+            hacked_score = 0
+            hacked_indicators = []
+            
+            # Common hacking indicators
+            hacking_keywords = [
+                # Pharmacy spam
+                'viagra', 'cialis', 'levitra', 'pharmacy', 'prescription drugs',
+                'buy pills online', 'cheap meds', 'online pharmacy', 'medications',
+                
+                # Casino/gambling spam
+                'online casino', 'poker online', 'slots', 'gambling', 'bet online',
+                'play casino', 'win money', 'jackpot', 'betting site',
+                
+                # Porn/adult content (when unexpected)
+                'xxx', 'porn', 'adult content', 'sex', 'nude', 'escorts',
+                
+                # Loan/financial scams
+                'payday loan', 'quick loan', 'fast cash', 'instant approval',
+                'bad credit loan', 'no credit check', 'guaranteed approval',
+                
+                # Crypto scams
+                'bitcoin mining', 'crypto investment', 'blockchain profit',
+                'cryptocurrency trading', 'btc doubler', 'ethereum giveaway',
+                
+                # SEO spam
+                'seo services', 'backlinks for sale', 'link building',
+                'google ranking', 'first page guaranteed',
+                
+                # Other common spam
+                'replica watches', 'fake documents', 'essay writing service',
+                'weight loss pills', 'work from home', 'make money online'
+            ]
+            
+            # Check for suspicious redirects
+            if response and response.history:
+                if len(response.history) > 2:  # Multiple redirects
+                    hacked_score += 20
+                    hacked_indicators.append("Multiple suspicious redirects")
+                
+                # Check if redirected to completely different domain
+                original_domain = urlparse(response.history[0].url).netloc if response.history else ''
+                final_domain = urlparse(response.url).netloc
+                if original_domain and final_domain and original_domain != final_domain:
+                    if not any(brand in final_domain for brand in ['google', 'facebook', 'microsoft']):
+                        hacked_score += 30
+                        hacked_indicators.append(f"Redirected to different domain: {final_domain}")
+            
+            # Check page content for spam keywords
+            text_lower = page_text.lower()
+            spam_found = []
+            for keyword in hacking_keywords:
+                if keyword in text_lower:
+                    # Check if it's contextually appropriate (e.g., pharmacy site mentioning medications)
+                    if 'pharmacy' not in result.get('industry_type', '').lower():
+                        spam_found.append(keyword)
+                        hacked_score += 10
+            
+            if spam_found:
+                hacked_indicators.append(f"Spam keywords found: {', '.join(spam_found[:5])}")
+            
+            # Check for hidden/invisible content
+            hidden_divs = soup.find_all(['div', 'span'], style=re.compile(r'display:\s*none|visibility:\s*hidden'))
+            if len(hidden_divs) > 5:
+                hacked_score += 15
+                hacked_indicators.append(f"Multiple hidden elements ({len(hidden_divs)})")
+            
+            # Check for suspicious scripts
+            scripts = soup.find_all('script')
+            suspicious_scripts = 0
+            for script in scripts:
+                script_text = script.string or ''
+                if any(term in script_text.lower() for term in ['eval(', 'base64', 'fromcharcode', 'unescape']):
+                    suspicious_scripts += 1
+            
+            if suspicious_scripts > 2:
+                hacked_score += 20
+                hacked_indicators.append(f"Suspicious scripts detected ({suspicious_scripts})")
+            
+            # Check for iframe injections
+            iframes = soup.find_all('iframe')
+            suspicious_iframes = []
+            for iframe in iframes:
+                src = iframe.get('src', '')
+                # Check for suspicious iframe sources
+                if src and not any(safe in src for safe in ['youtube', 'vimeo', 'google', 'facebook']):
+                    if iframe.get('style') and ('display:none' in iframe.get('style') or 'visibility:hidden' in iframe.get('style')):
+                        suspicious_iframes.append(src)
+            
+            if suspicious_iframes:
+                hacked_score += 25
+                hacked_indicators.append(f"Hidden iframes detected: {len(suspicious_iframes)}")
+            
+            # Check for out-of-place content
+            title = result.get('title', '').lower()
+            if title and page_text:
+                # If title suggests one thing but content is completely different
+                if ('vacation rental' in title and any(spam in text_lower for spam in ['viagra', 'casino', 'porn'])):
+                    hacked_score += 30
+                    hacked_indicators.append("Content doesn't match title/industry")
+            
+            # Determine if likely hacked
+            is_hacked = hacked_score >= 40
+            confidence = min(95, hacked_score)
+            
+            return {
+                'is_hacked': is_hacked,
+                'hacked_score': hacked_score,
+                'confidence': confidence,
+                'indicators': hacked_indicators
+            }
+            
+        except Exception as e:
+            logger.error(f"Error detecting hacked website: {e}")
+            return {
+                'is_hacked': False,
+                'hacked_score': 0,
+                'confidence': 0,
+                'indicators': []
+            }
+
+    # 3. ADD LANGUAGE DETECTION
+    def detect_website_language(self, soup, page_text):
+        """Detect the primary language of the website"""
+        try:
+            languages_detected = []
+            confidence = 0
+            
+            # 1. Check HTML lang attribute
+            html_tag = soup.find('html')
+            if html_tag and html_tag.get('lang'):
+                lang_code = html_tag.get('lang')[:2].lower()  # Get first 2 chars (e.g., 'en' from 'en-US')
+                languages_detected.append(('html_lang', lang_code))
+                confidence += 30
+            
+            # 2. Check meta language tags
+            meta_langs = soup.find_all('meta', attrs={'http-equiv': re.compile('content-language', re.I)})
+            for meta in meta_langs:
+                content = meta.get('content', '').lower()[:2]
+                if content:
+                    languages_detected.append(('meta_lang', content))
+                    confidence += 20
+            
+            # 3. Simple language detection based on common words
+            language_patterns = {
+                'english': {
+                    'words': ['the', 'and', 'for', 'with', 'this', 'that', 'from', 'have', 'will', 'about'],
+                    'chars': set('abcdefghijklmnopqrstuvwxyz')
+                },
+                'spanish': {
+                    'words': ['para', 'con', 'por', 'que', 'una', 'los', 'las', 'este', 'esta', 'más'],
+                    'chars': set('ñáéíóúü')
+                },
+                'french': {
+                    'words': ['pour', 'avec', 'dans', 'sur', 'les', 'des', 'une', 'est', 'être', 'plus'],
+                    'chars': set('àâçèéêëîïôùûüÿœæ')
+                },
+                'german': {
+                    'words': ['der', 'die', 'das', 'und', 'für', 'mit', 'ist', 'auf', 'ein', 'eine'],
+                    'chars': set('äöüß')
+                },
+                'italian': {
+                    'words': ['per', 'con', 'del', 'della', 'che', 'una', 'sono', 'più', 'anche', 'come'],
+                    'chars': set('àèéìòù')
+                },
+                'portuguese': {
+                    'words': ['para', 'com', 'por', 'que', 'uma', 'são', 'não', 'mais', 'foi', 'está'],
+                    'chars': set('ãõçáéíóúâêô')
+                },
+                'dutch': {
+                    'words': ['van', 'het', 'een', 'voor', 'met', 'aan', 'bij', 'ook', 'maar', 'deze'],
+                    'chars': set('ëï')
+                },
+                'chinese': {
+                    'words': [],
+                    'chars': None,  # Check Unicode range instead
+                    'unicode_range': (0x4E00, 0x9FFF)  # CJK Unified Ideographs
+                },
+                'japanese': {
+                    'words': [],
+                    'chars': None,
+                    'unicode_range': [(0x3040, 0x309F), (0x30A0, 0x30FF)]  # Hiragana and Katakana
+                },
+                'arabic': {
+                    'words': [],
+                    'chars': None,
+                    'unicode_range': (0x0600, 0x06FF)  # Arabic
+                },
+                'russian': {
+                    'words': ['и', 'в', 'на', 'с', 'по', 'для', 'не', 'что', 'это', 'как'],
+                    'chars': None,
+                    'unicode_range': (0x0400, 0x04FF)  # Cyrillic
+                }
+            }
+            
+            # Count occurrences of language-specific patterns
+            text_lower = page_text.lower()
+            words = text_lower.split()
+            language_scores = {}
+            
+            for lang, patterns in language_patterns.items():
+                score = 0
+                
+                # Check common words
+                if patterns['words']:
+                    for word in patterns['words']:
+                        score += words.count(word)
+                
+                # Check special characters
+                if patterns.get('chars'):
+                    for char in text_lower:
+                        if char in patterns['chars']:
+                            score += 0.5
+                
+                # Check Unicode ranges
+                if patterns.get('unicode_range'):
+                    for char in page_text:
+                        if isinstance(patterns['unicode_range'], list):
+                            # Multiple ranges (e.g., Japanese)
+                            for range_tuple in patterns['unicode_range']:
+                                if range_tuple[0] <= ord(char) <= range_tuple[1]:
+                                    score += 1
+                        else:
+                            # Single range
+                            if patterns['unicode_range'][0] <= ord(char) <= patterns['unicode_range'][1]:
+                                score += 1
+                
+                if score > 0:
+                    language_scores[lang] = score
+            
+            # Determine primary language
+            if language_scores:
+                primary_language = max(language_scores, key=language_scores.get)
+                total_score = sum(language_scores.values())
+                if total_score > 0:
+                    confidence += (language_scores[primary_language] / total_score) * 50
+            else:
+                primary_language = 'unknown'
+            
+            # Combine detection methods
+            if languages_detected:
+                # Prefer HTML lang attribute if available
+                for method, lang in languages_detected:
+                    if method == 'html_lang':
+                        lang_map = {
+                            'en': 'english', 'es': 'spanish', 'fr': 'french',
+                            'de': 'german', 'it': 'italian', 'pt': 'portuguese',
+                            'nl': 'dutch', 'zh': 'chinese', 'ja': 'japanese',
+                            'ar': 'arabic', 'ru': 'russian'
+                        }
+                        if lang in lang_map:
+                            primary_language = lang_map[lang]
+                            confidence = min(95, confidence + 20)
+            
+            # Check if it's a non-English site
+            is_non_english = primary_language != 'english' and primary_language != 'unknown'
+            
+            return {
+                'primary_language': primary_language,
+                'is_non_english': is_non_english,
+                'confidence': min(95, confidence),
+                'language_scores': language_scores,
+                'detected_methods': languages_detected
+            }
+            
+        except Exception as e:
+            logger.error(f"Error detecting language: {e}")
+            return {
+                'primary_language': 'unknown',
+                'is_non_english': False,
+                'confidence': 0,
+                'language_scores': {},
+                'detected_methods': []
+            }    
 
     def detect_third_party_listing(self, soup, page_text, title, description, final_url):
         """Detect if this is a third-party listing page rather than a direct property owner website"""
@@ -3004,24 +3380,28 @@ class DomainChecker:
         return metrics
 
     def setup_realtime_csv(self, output_dir):
-        """Setup real-time CSV files - ENHANCED VERSION"""
+        """Setup real-time CSV files - ENHANCED VERSION with new fields"""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
         # Main results file
         main_file = os.path.join(output_dir, f'realtime_results_{timestamp}.csv')
         self.csv_files['main'] = open(main_file, 'w', newline='', encoding='utf-8')
         
-        # ENHANCED: Added new fields
+        # ENHANCED: Added new fields for hacked and language detection
         fieldnames = ['domain', 'working', 'final_url', 'protocol', 'status_code', 
-                     'title', 'description', 'is_parked', 'is_business', 'industry_type', 
-                     'industry_confidence', 'company_size', 'size_confidence', 'vr_business_model',
-                     'vr_exclusion_reason', 'is_target_customer', 'vr_model_confidence',
-                     # NEW FIELDS
+                     'title', 'description', 'is_parked', 'is_business', 
+                     # NEW FIELDS for hacked and language
+                     'is_hacked', 'hacked_indicators', 'hacked_confidence',
+                     'primary_language', 'is_non_english', 'language_confidence',
+                     # Original fields
+                     'industry_type', 'industry_confidence', 'company_size', 'size_confidence', 
+                     'vr_business_model', 'vr_exclusion_reason', 'is_target_customer', 'vr_model_confidence',
+                     # VR specific fields
                      'vr_priority', 'vr_target_score', 'vr_target_factors', 'vr_property_count',
                      'vr_property_count_confidence', 'vr_decision_maker_accessible', 
                      'vr_decision_maker_score', 'vr_needs_website_upgrade', 'vr_upgrade_indicators',
                      'vr_property_type', 'vr_geographic_scope',
-                     # Original fields continue
+                     # Business info fields
                      'company_name', 'primary_email', 'primary_phone', 'address', 'country',
                      'country_confidence', 'state_province', 'city', 'local_area', 'serves_locations',
                      'social_media_links', 'website_complexity_score', 'word_count', 'total_links', 
@@ -3031,7 +3411,7 @@ class DomainChecker:
         self.csv_writers['main'].writeheader()
         self.csv_files['main'].flush()
         
-        # NEW: Create high-priority targets file
+        # High-priority targets file
         high_priority_file = os.path.join(output_dir, f'high_priority_targets_{timestamp}.csv')
         self.csv_files['high_priority'] = open(high_priority_file, 'w', newline='', encoding='utf-8')
         self.csv_writers['high_priority'] = csv.DictWriter(self.csv_files['high_priority'], fieldnames=fieldnames)
@@ -3042,7 +3422,7 @@ class DomainChecker:
         print(f"🎯 High-priority targets file created: {high_priority_file}")
 
     def write_result_realtime(self, result):
-        """Write result to CSV immediately - ENHANCED VERSION"""
+        """Write result to CSV immediately - FIXED INDENTATION"""
         try:
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
@@ -3065,7 +3445,7 @@ class DomainChecker:
             if company_size:
                 self.stats['company_sizes'][company_size] = self.stats['company_sizes'].get(company_size, 0) + 1
             
-            # ENHANCED: Track new VR-specific stats
+            # Track new VR-specific stats
             if result.get('industry_type') == 'vacation_rental':
                 # Track business models
                 vr_model = result.get('vr_business_model')
@@ -3116,6 +3496,12 @@ class DomainChecker:
                 'description': result.get('description', '') or '',
                 'is_parked': result.get('is_parked', False),
                 'is_business': result.get('is_business', False),
+                'is_hacked': result.get('is_hacked', False),
+                'hacked_indicators': '; '.join(result.get('hacked_indicators', [])),
+                'hacked_confidence': result.get('hacked_confidence', 0) or 0,
+                'primary_language': result.get('primary_language', '') or '',
+                'is_non_english': result.get('is_non_english', False),
+                'language_confidence': result.get('language_confidence', 0) or 0,
                 'industry_type': result.get('industry_type', '') or '',
                 'industry_confidence': result.get('industry_confidence', 0) or 0,
                 'company_size': result.get('company_size', '') or '',
@@ -3160,7 +3546,7 @@ class DomainChecker:
             self.csv_writers['main'].writerow(row)
             self.csv_files['main'].flush()
             
-            # ENHANCED: Write high-priority targets to separate file
+            # Write high-priority targets to separate file
             if result.get('vr_priority') == 'high' and result.get('industry_type') == 'vacation_rental':
                 self.csv_writers['high_priority'].writerow(row)
                 self.csv_files['high_priority'].flush()
@@ -3170,6 +3556,7 @@ class DomainChecker:
             
         except Exception as e:
             logger.error(f"Error writing result: {e}")
+
 
     def display_live_stats(self):
         """Display live statistics - ENHANCED VERSION"""
